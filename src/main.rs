@@ -1,12 +1,13 @@
 use opencv::{
-    core::{self, Mat, Point, Rect, Scalar},
+    core::{self, AlgorithmHint, Mat, Point, Rect, Scalar, Size, Vector},
     imgcodecs::{self, IMREAD_COLOR},
     imgproc::{
-        self, resize, threshold, LineTypes, FILLED, INTER_LINEAR, THRESH_BINARY, TM_CCOEFF_NORMED
+        self, cvt_color, resize, threshold, LineTypes, COLOR_BGR2GRAY, FILLED, INTER_AREA, INTER_LINEAR, THRESH_BINARY, TM_CCOEFF_NORMED
     },
     prelude::*,
     Result as OpenCVResult,
 };
+use rayon::prelude::*;
 use std::{collections::HashMap, sync::Arc, time::Instant};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -24,6 +25,9 @@ use x11rb::protocol::xproto::KeyButMask;
 #[derive(Debug, Deserialize, Serialize)]
 struct Settings {
     window_title: String,
+    reference_width: i32,
+    reference_height: i32,
+    convert_to_grayscale: bool,
     templates: Vec<TemplateSettings>,
 }
 
@@ -35,7 +39,7 @@ struct TemplateSettings {
     min_distance: f32,
     red: f32,
     green: f32,
-    blue: f32
+    blue: f32,
 }
 
 #[derive(Debug)]
@@ -113,6 +117,7 @@ type AppResult<T> = std::result::Result<T, AppError>;
 struct ObjectTemplate {
     name: String,
     template: Mat,
+    gray_template: Mat,
     threshold: f64,
     min_distance: f32,
     red: f32,
@@ -123,14 +128,18 @@ struct ObjectTemplate {
 impl ObjectTemplate {
     fn new(name: &str, template_path: &str, threshold: f64, min_distance: f32, red: f32, green: f32, blue: f32) -> OpenCVResult<Self> {
         let template = imgcodecs::imread(template_path, IMREAD_COLOR)?;
+        let mut gray_template = Mat::default();
+        cvt_color(&template, &mut gray_template, COLOR_BGR2GRAY, 0, AlgorithmHint::ALGO_HINT_DEFAULT)?;
+        
         Ok(Self {
             name: name.to_string(),
             template,
+            gray_template,
             threshold,
             min_distance,
             red,
             green,
-            blue
+            blue,
         })
     }
 }
@@ -144,161 +153,172 @@ struct DetectionResult {
 
 struct ObjectDetector {
     templates: Vec<Arc<ObjectTemplate>>,
-    scale_factor: f64,
+    base_scale_factor: f64,
+    reference_size: Size,
 }
 
 impl ObjectDetector {
-    fn new(scale_factor: f64) -> Self {
+    fn new(base_scale_factor: f64, reference_width: i32, reference_height: i32) -> Self {
         Self { 
             templates: Vec::new(),
-            scale_factor,
+            base_scale_factor,
+            reference_size: Size::new(reference_width, reference_height),
         }
+    }
+
+    fn calculate_current_scale(&self, current_size: Size) -> f64 {
+        let width_scale = current_size.width as f64 / self.reference_size.width as f64;
+        let height_scale = current_size.height as f64 / self.reference_size.height as f64;
+        (width_scale + height_scale) / 2.0
     }
 
     fn add_template(&mut self, name: &str, template_path: &str, threshold: f64, min_distance: f32, red: f32, green: f32, blue: f32) -> OpenCVResult<()> {
-        let mut template = imgcodecs::imread(template_path, IMREAD_COLOR)?;
-        
-        // Масштабируем шаблон для ускорения поиска
-        if self.scale_factor != 1.0 {
-            let mut resized = Mat::default();
-            resize(
-                &template,
-                &mut resized,
-                core::Size::new(0, 0),
-                self.scale_factor,
-                self.scale_factor,
-                INTER_LINEAR,
-            )?;
-            template = resized;
-        }
-
-        let template = Arc::new(ObjectTemplate {
-            name: name.to_string(),
-            template,
-            threshold,
-            min_distance: min_distance * (self.scale_factor as f32),
-            red,
-            green,
-            blue,
-        });
-        
-        self.templates.push(template);
+        let template = ObjectTemplate::new(name, template_path, threshold, min_distance, red, green, blue)?;
+        self.templates.push(Arc::new(template));
         Ok(())
     }
 
-    fn detect_objects(&self, image: &Mat) -> OpenCVResult<Vec<DetectionResult>> {
+    fn detect_objects_optimized(&mut self, image: &Mat, convert_to_grayscale: bool) -> OpenCVResult<Vec<DetectionResult>> {
         let start_time = Instant::now();
         
-        // Масштабируем изображение для ускорения поиска
-        let mut resized = Mat::default();
-        if self.scale_factor != 1.0 {
-            resize(
-                image,
-                &mut resized,
-                core::Size::new(0, 0),
-                self.scale_factor,
-                self.scale_factor,
-                INTER_LINEAR,
-            )?;
-        }
-        let image = if self.scale_factor != 1.0 { &resized } else { image };
+        // Подготовка изображения
+        let working_image = if convert_to_grayscale {
+            let mut gray = Mat::default();
+            cvt_color(image, &mut gray, COLOR_BGR2GRAY, 0, AlgorithmHint::ALGO_HINT_DEFAULT)?;
+            gray
+        } else {
+            image.clone()
+        };
 
-        let mut handles = Vec::with_capacity(self.templates.len());
-        
-        // Запускаем поиск для каждого шаблона в отдельном потоке
-        for template in &self.templates {
-            let template = template.clone();
-            let image = image.clone();
-            
-            handles.push(thread::spawn(move || {
-                let mut results = Vec::new();
-                
+        // Масштабирование изображения
+        let mut resized = Mat::default();
+        resize(
+            &working_image,
+            &mut resized,
+            Size::new(0, 0),
+            self.base_scale_factor,
+            self.base_scale_factor,
+            INTER_AREA,
+        )?;
+
+        // Параллельное сопоставление шаблонов
+        let all_results: Vec<Vec<DetectionResult>> = self.templates
+            .par_iter()
+            .map(|template| {
+                let template_image = if convert_to_grayscale {
+                    &template.gray_template
+                } else {
+                    &template.template
+                };
+
+                // Масштабирование шаблона
+                let mut scaled_template = Mat::default();
+                if resize(
+                    template_image,
+                    &mut scaled_template,
+                    Size::new(0, 0),
+                    self.base_scale_factor,
+                    self.base_scale_factor,
+                    INTER_AREA,
+                ).is_err() {
+                    return Vec::new();
+                }
+
                 let mut result_mat = Mat::default();
-                imgproc::match_template(
-                    &image,
-                    &template.template,
+                if imgproc::match_template(
+                    &resized,
+                    &scaled_template,
                     &mut result_mat,
                     TM_CCOEFF_NORMED,
                     &Mat::default(),
-                )?;
+                ).is_err() {
+                    return Vec::new();
+                }
 
                 let mut thresholded = Mat::default();
-                threshold(
+                if threshold(
                     &result_mat,
                     &mut thresholded,
                     template.threshold,
                     1.0,
                     THRESH_BINARY,
-                )?;
+                ).is_err() {
+                    return Vec::new();
+                }
+
+                let mut mask_8u = Mat::default();
+                if thresholded.convert_to(&mut mask_8u, core::CV_8U, 255.0, 0.0).is_err() {
+                    return Vec::new();
+                }
+
+                let mut local_results = Vec::new();
+                let mut max_val = f64::MIN;
+                let mut max_loc = Point::default();
                 
                 loop {
-                    let mut max_val = 0.0;
-                    let mut max_loc = Point::default();
-                    
-                    core::min_max_loc(
+                    if core::min_max_loc(
                         &result_mat,
                         None,
                         Some(&mut max_val),
                         None,
                         Some(&mut max_loc),
-                        &core::no_array(),
-                    )?;
-
+                        &mask_8u,
+                    ).is_err() {
+                        break;
+                    }
+                    
                     if max_val < template.threshold {
                         break;
                     }
-
-                    results.push(DetectionResult {
+                    
+                    local_results.push(DetectionResult {
                         object_name: template.name.clone(),
-                        location: max_loc,
+                        location: Point::new(
+                            (max_loc.x as f64 / self.base_scale_factor) as i32,
+                            (max_loc.y as f64 / self.base_scale_factor) as i32,
+                        ),
                         confidence: max_val,
                     });
 
-                    // Затираем найденную область для поиска следующего совпадения
-                    imgproc::rectangle(
+                    // Обнуляем найденную область
+                    let _ = imgproc::rectangle(
                         &mut result_mat,
                         Rect::new(
-                            max_loc.x - template.template.cols() / 2,
-                            max_loc.y - template.template.rows() / 2,
-                            template.template.cols(),
-                            template.template.rows(),
+                            max_loc.x - scaled_template.cols() / 2,
+                            max_loc.y - scaled_template.rows() / 2,
+                            scaled_template.cols(),
+                            scaled_template.rows(),
                         ),
                         Scalar::all(0.0),
                         FILLED,
                         LineTypes::LINE_8.into(),
                         0,
-                    )?;
+                    );
+
+                    let _ = imgproc::rectangle(
+                        &mut mask_8u,
+                        Rect::new(
+                            max_loc.x - scaled_template.cols() / 2,
+                            max_loc.y - scaled_template.rows() / 2,
+                            scaled_template.cols(),
+                            scaled_template.rows(),
+                        ),
+                        Scalar::all(0.0),
+                        FILLED,
+                        LineTypes::LINE_8.into(),
+                        0,
+                    );
+
+                    max_val = f64::MIN;
                 }
                 
-                Ok::<_, opencv::Error>(results)
-            }));
-        }
+                local_results
+            })
+            .collect();
 
-        // Собираем результаты из всех потоков
-        let mut all_results = Vec::new();
-        for handle in handles {
-            let mut thread_results = handle.join().unwrap()?;
-            all_results.append(&mut thread_results);
-        }
-
-        // Фильтруем слишком близкие результаты
-        let filtered_results = self.filter_close_detections(all_results);
+        println!("Optimized detection took: {:?}", start_time.elapsed());
         
-        // Масштабируем координаты обратно
-        let mut final_results = Vec::new();
-        for result in filtered_results {
-            final_results.push(DetectionResult {
-                object_name: result.object_name,
-                location: Point::new(
-                    (result.location.x as f64 / self.scale_factor) as i32,
-                    (result.location.y as f64 / self.scale_factor) as i32,
-                ),
-                confidence: result.confidence,
-            });
-        }
-
-        println!("Detection took: {:?}", start_time.elapsed());
-        Ok(final_results)
+        Ok(self.filter_close_detections(all_results.into_iter().flatten().collect()))
     }
 
     fn filter_close_detections(&self, mut results: Vec<DetectionResult>) -> Vec<DetectionResult> {
@@ -328,17 +348,6 @@ impl ObjectDetector {
     fn draw_detections(&self, image: &mut Mat, detections: &[DetectionResult]) -> OpenCVResult<()> {
         for detection in detections {
             if let Some(template) = self.templates.iter().find(|t| t.name == detection.object_name) {
-                // Масштабируем размеры шаблона обратно к оригинальным размерам
-                let cols = (template.template.cols() as f64 / self.scale_factor) as i32;
-                let rows = (template.template.rows() as f64 / self.scale_factor) as i32;
-
-                let rect = Rect::new(
-                    detection.location.x,
-                    detection.location.y,
-                    cols,
-                    rows,
-                );
-
                 let color = Scalar::new(
                     template.blue.into(),
                     template.green.into(),
@@ -348,7 +357,12 @@ impl ObjectDetector {
 
                 imgproc::rectangle(
                     image,
-                    rect,
+                    Rect::new(
+                        detection.location.x,
+                        detection.location.y,
+                        template.template.cols(),
+                        template.template.rows(),
+                    ),
                     color,
                     2,
                     LineTypes::LINE_8.into(),
@@ -447,42 +461,104 @@ fn parse_window_id(geometry_output: &str) -> AppResult<u32> {
         ))
 }
 
-fn load_settings() -> AppResult<Settings> {
-    let settings_content = fs::read_to_string("settings.json")?;
-    let settings: Settings = serde_json::from_str(&settings_content)?;
-    Ok(settings)
+fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
+    let settings_path = "settings.json";
+    
+    if let Ok(settings_content) = fs::read_to_string(settings_path) {
+        serde_json::from_str(&settings_content).map_err(Into::into)
+    } else {
+        let (width, height) = get_window_size(window_title)?;
+        
+        let settings = Settings {
+            window_title: window_title.to_string(),
+            reference_width: width,
+            reference_height: height,
+            convert_to_grayscale: true,
+            templates: Vec::new(),
+        };
+        
+        let serialized = serde_json::to_string_pretty(&settings)?;
+        fs::write(settings_path, serialized)?;
+        
+        Ok(settings)
+    }
+}
+
+fn get_window_size(window_title: &str) -> AppResult<(i32, i32)> {
+    let output = Command::new("xwininfo")
+        .args(&["-name", window_title])
+        .output()?;
+    
+    if !output.status.success() {
+        return Err(AppError::WindowNotFound(
+            format!("Window '{}' not found", window_title)
+        ));
+    }
+
+    let output_str = String::from_utf8(output.stdout)?;
+    
+    let width = output_str.lines()
+        .find(|l| l.trim().starts_with("Width"))
+        .and_then(|l| l.split(':').nth(1))
+        .and_then(|v| v.trim().split(' ').next())
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(|| AppError::WindowNotFound(
+            "Could not parse width".to_string()
+        ))?;
+
+    let height = output_str.lines()
+        .find(|l| l.trim().starts_with("Height"))
+        .and_then(|l| l.split(':').nth(1))
+        .and_then(|v| v.trim().split(' ').next())
+        .and_then(|v| v.parse().ok())
+        .ok_or_else(|| AppError::WindowNotFound(
+            "Could not parse height".to_string()
+        ))?;
+
+    Ok((width, height))
 }
 
 fn click_and_drag_with_xdotool(
     window_x: i32,
     window_y: i32,
     from: (i32, i32),
-    from_size: (i32, i32),  // Добавляем размеры объекта
+    from_size: (i32, i32),
     to: (i32, i32),
-    to_size: (i32, i32),    // Добавляем размеры объекта
+    to_size: (i32, i32),
     move_delay_ms: u64
 ) -> AppResult<()> {
-    // Рассчитываем центр начального объекта
+    let original_pos = Command::new("xdotool")
+        .args(&["getmouselocation", "--shell"])
+        .output()?;
+    
+    let original_pos = String::from_utf8(original_pos.stdout)?;
+    let mut x = 0;
+    let mut y = 0;
+    
+    for line in original_pos.lines() {
+        if line.starts_with("X=") {
+            x = line[2..].parse().unwrap_or(0);
+        } else if line.starts_with("Y=") {
+            y = line[2..].parse().unwrap_or(0);
+        }
+    }
+
     let abs_from_x = window_x + from.0 + from_size.0 / 2;
     let abs_from_y = window_y + from.1 + from_size.1 / 2;
     
-    // Рассчитываем центр конечного объекта
     let abs_to_x = window_x + to.0 + to_size.0 / 2;
     let abs_to_y = window_y + to.1 + to_size.1 / 2;
 
-    // 1. Перемещаем курсор в центр начального объекта
     Command::new("xdotool")
         .args(&["mousemove", &abs_from_x.to_string(), &abs_from_y.to_string()])
         .status()?;
     thread::sleep(Duration::from_millis(move_delay_ms));
 
-    // 2. Нажимаем кнопку мыши
     Command::new("xdotool")
         .args(&["mousedown", "1"])
         .status()?;
-    thread::sleep(Duration::from_millis(2));
+    thread::sleep(Duration::from_millis(5));
 
-    // 3. Плавно перемещаем курсор в центр конечного объекта
     let steps = 3;
     for step in 0..=steps {
         let x = abs_from_x + (abs_to_x - abs_from_x) * step as i32 / steps as i32;
@@ -494,15 +570,16 @@ fn click_and_drag_with_xdotool(
         thread::sleep(Duration::from_millis(move_delay_ms));
     }
 
-    // 4. Отпускаем кнопку мыши
     Command::new("xdotool")
         .args(&["mouseup", "1"])
         .status()?;
-    thread::sleep(Duration::from_millis(2));
+    thread::sleep(Duration::from_millis(5));
 
+    Command::new("xdotool")
+        .args(&["mousemove", &x.to_string(), &y.to_string()])
+        .status()?;
     Ok(())
 }
-
 
 fn group_detections_by_name(detections: Vec<DetectionResult>) -> HashMap<String, Vec<DetectionResult>> {
     let mut groups = HashMap::new();
@@ -515,9 +592,14 @@ fn group_detections_by_name(detections: Vec<DetectionResult>) -> HashMap<String,
 }
 
 fn main() -> AppResult<()> {
-    let settings = load_settings()?;
+    let window_title = "M2006C3MNG";
+    let settings = load_or_create_settings(window_title)?;
     
-    let mut detector = ObjectDetector::new(0.35);
+    let mut detector = ObjectDetector::new(
+        0.35,
+        settings.reference_width,
+        settings.reference_height
+    );
     
     for template_settings in settings.templates {
         detector.add_template(
@@ -541,7 +623,7 @@ fn main() -> AppResult<()> {
         return Err(AppError::ImageProcessing("Loaded image is empty".to_string()));
     }
 
-    let detections = detector.detect_objects(&image)?;
+    let detections = detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
     
     println!("Found {} objects:", detections.len());
     for detection in &detections {
@@ -576,7 +658,6 @@ fn main() -> AppResult<()> {
                     continue;
                 }
                 
-                // Получаем размеры объектов из шаблонов (уже масштабированные обратно)
                 let from_template = detector.templates.iter()
                     .find(|t| t.name == filtered_objects[i].object_name)
                     .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
@@ -585,14 +666,13 @@ fn main() -> AppResult<()> {
                     .find(|t| t.name == filtered_objects[i+1].object_name)
                     .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
                 
-                // Масштабируем размеры шаблонов обратно к оригинальным размерам
                 let from_size = (
-                    (from_template.template.cols() as f64 / detector.scale_factor) as i32,
-                    (from_template.template.rows() as f64 / detector.scale_factor) as i32
+                    from_template.template.cols(),
+                    from_template.template.rows()
                 );
                 let to_size = (
-                    (to_template.template.cols() as f64 / detector.scale_factor) as i32,
-                    (to_template.template.rows() as f64 / detector.scale_factor) as i32
+                    to_template.template.cols(),
+                    to_template.template.rows()
                 );
                 
                 let from = filtered_objects[i].location;
@@ -605,10 +685,10 @@ fn main() -> AppResult<()> {
                     from_size,
                     (to.x, to.y),
                     to_size,
-                    3 // задержка в миллисекундах между шагами перемещения
+                    3
                 )?;
                 
-                thread::sleep(Duration::from_millis(2));
+                thread::sleep(Duration::from_millis(5));
                 
                 connected_objects.push(i);
                 connected_objects.push(i + 1);

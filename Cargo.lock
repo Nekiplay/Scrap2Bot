@@ -8,6 +8,7 @@ version = "0.1.0"
 dependencies = [
  "image",
  "opencv",
+ "rayon",
  "serde",
  "serde_json",
  "x11rb",
