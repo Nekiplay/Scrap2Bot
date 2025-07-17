@@ -706,7 +706,7 @@ fn main() -> AppResult<()> {
         }
 
         // Пауза между итерациями, чтобы не нагружать систему
-        thread::sleep(Duration::from_millis(250));
+        thread::sleep(Duration::from_millis(350));
     }
 
     Ok(())
