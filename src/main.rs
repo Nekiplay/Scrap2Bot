@@ -328,11 +328,15 @@ impl ObjectDetector {
     fn draw_detections(&self, image: &mut Mat, detections: &[DetectionResult]) -> OpenCVResult<()> {
         for detection in detections {
             if let Some(template) = self.templates.iter().find(|t| t.name == detection.object_name) {
+                // Масштабируем размеры шаблона обратно к оригинальным размерам
+                let cols = (template.template.cols() as f64 / self.scale_factor) as i32;
+                let rows = (template.template.rows() as f64 / self.scale_factor) as i32;
+
                 let rect = Rect::new(
                     detection.location.x,
                     detection.location.y,
-                    template.template.cols(),
-                    template.template.rows(),
+                    cols,
+                    rows,
                 );
 
                 let color = Scalar::new(
@@ -513,7 +517,7 @@ fn group_detections_by_name(detections: Vec<DetectionResult>) -> HashMap<String,
 fn main() -> AppResult<()> {
     let settings = load_settings()?;
     
-    let mut detector = ObjectDetector::new(0.5);
+    let mut detector = ObjectDetector::new(0.35);
     
     for template_settings in settings.templates {
         detector.add_template(
@@ -572,7 +576,7 @@ fn main() -> AppResult<()> {
                     continue;
                 }
                 
-                // Получаем размеры объектов из шаблонов
+                // Получаем размеры объектов из шаблонов (уже масштабированные обратно)
                 let from_template = detector.templates.iter()
                     .find(|t| t.name == filtered_objects[i].object_name)
                     .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
@@ -581,8 +585,15 @@ fn main() -> AppResult<()> {
                     .find(|t| t.name == filtered_objects[i+1].object_name)
                     .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
                 
-                let from_size = (from_template.template.cols(), from_template.template.rows());
-                let to_size = (to_template.template.cols(), to_template.template.rows());
+                // Масштабируем размеры шаблонов обратно к оригинальным размерам
+                let from_size = (
+                    (from_template.template.cols() as f64 / detector.scale_factor) as i32,
+                    (from_template.template.rows() as f64 / detector.scale_factor) as i32
+                );
+                let to_size = (
+                    (to_template.template.cols() as f64 / detector.scale_factor) as i32,
+                    (to_template.template.rows() as f64 / detector.scale_factor) as i32
+                );
                 
                 let from = filtered_objects[i].location;
                 let to = filtered_objects[i + 1].location;
@@ -590,14 +601,14 @@ fn main() -> AppResult<()> {
                 click_and_drag_with_xdotool(
                     window_x,
                     window_y,
-                   (from.x, from.y), 
-                    from_size.into(),
+                    (from.x, from.y), 
+                    from_size,
                     (to.x, to.y),
-                    to_size.into(),
+                    to_size,
                     3 // задержка в миллисекундах между шагами перемещения
                 )?;
                 
-                thread::sleep(Duration::from_millis(2)); // задержка между соединениями
+                thread::sleep(Duration::from_millis(2));
                 
                 connected_objects.push(i);
                 connected_objects.push(i + 1);
