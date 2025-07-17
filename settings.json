@@ -4,7 +4,7 @@
         {
             "name": "Empty",
             "path": "templates/empty.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 0.0,
             "green": 0.0,
@@ -13,7 +13,7 @@
         {
             "name": "Barrel 1",
             "path": "templates/1.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 149.0,
             "green": 172.0,
@@ -22,7 +22,7 @@
         {
             "name": "Barrel 2",
             "path": "templates/2.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 255.0,
             "green": 0.0,
@@ -31,7 +31,7 @@
         {
             "name": "Barrel 3",
             "path": "templates/3.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 255.0,
             "green": 0.0,
@@ -40,7 +40,7 @@
         {
             "name": "Barrel 4",
             "path": "templates/4.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 142.0,
             "green": 91.0,
@@ -49,7 +49,7 @@
         {
             "name": "Barrel 5",
             "path": "templates/5.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 84.0,
             "green": 155.0,
@@ -58,7 +58,7 @@
         {
             "name": "Barrel 6",
             "path": "templates/6.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 65.0,
             "green": 89.0,
@@ -67,7 +67,7 @@
         {
             "name": "Barrel 7",
             "path": "templates/7.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 150.0,
             "green": 139.0,
@@ -76,7 +76,7 @@
         {
             "name": "Barrel 8",
             "path": "templates/8.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 217.0,
             "green": 145.0,
@@ -85,7 +85,7 @@
         {
             "name": "Barrel 9",
             "path": "templates/9.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 217.0,
             "green": 145.0,
@@ -94,7 +94,7 @@
         {
             "name": "Barrel 10",
             "path": "templates/10.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 44.0,
             "green": 117.0,
@@ -103,7 +103,7 @@
         {
             "name": "Barrel 11",
             "path": "templates/11.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 217.0,
             "green": 145.0,
@@ -112,7 +112,7 @@
         {
             "name": "Barrel 12",
             "path": "templates/12.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 217.0,
             "green": 145.0,
@@ -121,7 +121,7 @@
         {
             "name": "Barrel 13",
             "path": "templates/13.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 217.0,
             "green": 145.0,
@@ -130,7 +130,7 @@
         {
             "name": "Barrel 14",
             "path": "templates/14.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 217.0,
             "green": 145.0,
@@ -139,7 +139,7 @@
         {
             "name": "Barrel 15",
             "path": "templates/15.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 217.0,
             "green": 145.0,
@@ -148,7 +148,7 @@
         {
             "name": "Barrel 16",
             "path": "templates/16.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 217.0,
             "green": 145.0,
@@ -157,7 +157,7 @@
         {
             "name": "Barrel 17",
             "path": "templates/17.png",
-            "threshold": 0.9,
+            "threshold": 0.85,
             "min_distance": 25.0,
             "red": 217.0,
             "green": 145.0,

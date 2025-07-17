@@ -391,10 +391,10 @@ fn click_and_drag_with_xdotool(
     Command::new("xdotool")
         .args(&["mousedown", "1"])
         .status()?;
-    thread::sleep(Duration::from_millis(15));
+    thread::sleep(Duration::from_millis(2));
 
     // 3. Плавно перемещаем курсор в центр конечного объекта
-    let steps = 10;
+    let steps = 3;
     for step in 0..=steps {
         let x = abs_from_x + (abs_to_x - abs_from_x) * step as i32 / steps as i32;
         let y = abs_from_y + (abs_to_y - abs_from_y) * step as i32 / steps as i32;
@@ -409,7 +409,7 @@ fn click_and_drag_with_xdotool(
     Command::new("xdotool")
         .args(&["mouseup", "1"])
         .status()?;
-    thread::sleep(Duration::from_millis(15));
+    thread::sleep(Duration::from_millis(2));
 
     Ok(())
 }
@@ -509,10 +509,10 @@ fn main() -> AppResult<()> {
                     from_size.into(),
                     (to.x, to.y),
                     to_size.into(),
-                    7 // задержка в миллисекундах между шагами перемещения
+                    3 // задержка в миллисекундах между шагами перемещения
                 )?;
                 
-                thread::sleep(Duration::from_millis(25)); // задержка между соединениями
+                thread::sleep(Duration::from_millis(2)); // задержка между соединениями
                 
                 connected_objects.push(i);
                 connected_objects.push(i + 1);
