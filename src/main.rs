@@ -591,6 +591,60 @@ fn group_detections_by_name(detections: Vec<DetectionResult>) -> HashMap<String,
     groups
 }
 
+fn display_results_as_table(detections: &[DetectionResult], cols: usize, rows: usize) {
+    if detections.is_empty() {
+        println!("No objects detected");
+        return;
+    }
+
+    // Находим минимальные и максимальные координаты
+    let min_x = detections.iter().map(|d| d.location.x).min().unwrap_or(0);
+    let max_x = detections.iter().map(|d| d.location.x).max().unwrap_or(0);
+    let min_y = detections.iter().map(|d| d.location.y).min().unwrap_or(0);
+    let max_y = detections.iter().map(|d| d.location.y).max().unwrap_or(0);
+
+    // Вычисляем ширину и высоту ячейки
+    let cell_width = (max_x - min_x) as f32 / (cols - 1) as f32;
+    let cell_height = (max_y - min_y) as f32 / (rows - 1) as f32;
+
+    // Создаем таблицу
+    let mut table: Vec<Vec<Option<(u32)>>> = vec![vec![None; cols]; rows];
+
+    // Заполняем таблицу
+    for detection in detections {
+        let col = ((detection.location.x - min_x) as f32 / cell_width).round() as usize;
+        let row = ((detection.location.y - min_y) as f32 / cell_height).round() as usize;
+
+       let number = detection.object_name
+                .chars()
+                .filter_map(|c| c.to_digit(10))
+                .fold(0, |acc, digit| acc * 10 + digit);
+
+        if row < rows && col < cols {
+            table[row][col] = Some(number);
+        }
+    }
+
+   let cell_width = 4; // Минимальная ширина для "0" и двузначных чисел
+
+    let line_length = cols * (cell_width + 2) + 1;
+
+    // Выводим таблицу
+    println!("Detection results ({}x{} grid):", cols, rows);
+    println!("{}", "-".repeat(line_length));
+    
+    for row in table {
+        print!("|");
+        for cell in row {
+            match cell {
+                Some((num)) => print!(" {:^3} |", num),
+                None => print!(" {:^3} |", "0"), // Заменяем None на "0"
+            }
+        }
+        println!("\n{}", "-".repeat(line_length));
+    }
+}
+
 use std::env;
 fn main() -> AppResult<()> {
     let args: Vec<String> = env::args().collect();
@@ -632,71 +686,91 @@ fn main() -> AppResult<()> {
         }
 
         let detections = detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
-        
-        println!("Found {} objects:", detections.len());
-        for detection in &detections {
-            println!(
-                "- {} at ({}, {}) with confidence {:.2}",
-                detection.object_name,
-                detection.location.x,
-                detection.location.y,
-                detection.confidence
-            );
-        }
+        display_results_as_table(&detections, 4, 5);
 
         detector.draw_detections(&mut image, &detections)?;
         imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
         println!("Result saved to result.png");
 
+        // Группировка обнаруженных объектов по имени
         for (name, objects) in group_detections_by_name(detections) {
-            let mut filtered_objects: Vec<_> = objects.into_iter()
-                .filter(|obj| obj.object_name != "Empty")
-                .collect();
-
-            if filtered_objects.len() >= 2 {
-                filtered_objects.sort_by(|a, b| a.location.x.cmp(&b.location.x));
-                
-                let mut connected_objects = Vec::new();
-                
-                for i in 0..filtered_objects.len() - 1 {
-                    if connected_objects.contains(&i) {
-                        continue;
-                    }
-                    
-                    let from_template = detector.templates.iter()
-                        .find(|t| t.name == filtered_objects[i].object_name)
+            if name == "Magnet" {
+                // Обработка магнитов - одиночный клик
+                for obj in objects {
+                    let template = detector.templates.iter()
+                        .find(|t| t.name == obj.object_name)
                         .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
                     
-                    let to_template = detector.templates.iter()
-                        .find(|t| t.name == filtered_objects[i+1].object_name)
-                        .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-                    
-                    let from_size = (
-                        from_template.template.cols(),
-                        from_template.template.rows()
-                    );
-                    let to_size = (
-                        to_template.template.cols(),
-                        to_template.template.rows()
+                    let size = (
+                        template.template.cols(),
+                        template.template.rows()
                     );
                     
-                    let from = filtered_objects[i].location;
-                    let to = filtered_objects[i + 1].location;
+                    let abs_x = window_x + obj.location.x + size.0 / 2;
+                    let abs_y = window_y + obj.location.y + size.1 / 2;
 
-                    click_and_drag_with_xdotool(
-                        window_x,
-                        window_y,
-                        (from.x, from.y), 
-                        from_size,
-                        (to.x, to.y),
-                        to_size,
-                        3
-                    )?;
-                    
+                    // Одиночный клик
+                    Command::new("xdotool")
+                        .args(&["mousemove", &abs_x.to_string(), &abs_y.to_string()])
+                        .status()?;
                     thread::sleep(Duration::from_millis(5));
+
+                    Command::new("xdotool")
+                        .args(&["click", "1"])
+                        .status()?;
+                    thread::sleep(Duration::from_millis(5));
+                }
+            } else {
+                // Оригинальная логика для других объектов (соединение пар)
+                let mut filtered_objects: Vec<_> = objects.into_iter()
+                    .filter(|obj| obj.object_name != "Empty")
+                    .collect();
+
+                if filtered_objects.len() >= 2 {
+                    filtered_objects.sort_by(|a, b| a.location.x.cmp(&b.location.x));
                     
-                    connected_objects.push(i);
-                    connected_objects.push(i + 1);
+                    let mut connected_objects = Vec::new();
+                    
+                    for i in 0..filtered_objects.len() - 1 {
+                        if connected_objects.contains(&i) {
+                            continue;
+                        }
+                        
+                        let from_template = detector.templates.iter()
+                            .find(|t| t.name == filtered_objects[i].object_name)
+                            .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                        
+                        let to_template = detector.templates.iter()
+                            .find(|t| t.name == filtered_objects[i+1].object_name)
+                            .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                        
+                        let from_size = (
+                            from_template.template.cols(),
+                            from_template.template.rows()
+                        );
+                        let to_size = (
+                            to_template.template.cols(),
+                            to_template.template.rows()
+                        );
+                        
+                        let from = filtered_objects[i].location;
+                        let to = filtered_objects[i + 1].location;
+
+                        click_and_drag_with_xdotool(
+                            window_x,
+                            window_y,
+                            (from.x, from.y), 
+                            from_size,
+                            (to.x, to.y),
+                            to_size,
+                            3
+                        )?;
+                        
+                        thread::sleep(Duration::from_millis(5));
+                        
+                        connected_objects.push(i);
+                        connected_objects.push(i + 1);
+                    }
                 }
             }
         }
@@ -711,3 +785,4 @@ fn main() -> AppResult<()> {
 
     Ok(())
 }
+
