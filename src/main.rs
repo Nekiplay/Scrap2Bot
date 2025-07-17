@@ -591,7 +591,11 @@ fn group_detections_by_name(detections: Vec<DetectionResult>) -> HashMap<String,
     groups
 }
 
+use std::env;
 fn main() -> AppResult<()> {
+    let args: Vec<String> = env::args().collect();
+    let infinite_mode = args.iter().any(|arg| arg == "--infinite" || arg == "-i");
+
     let window_title = "M2006C3MNG";
     let settings = load_or_create_settings(window_title)?;
     
@@ -613,87 +617,96 @@ fn main() -> AppResult<()> {
         )?;
     }
 
-    let screenshot_path = "screenshot.png";
-    let (window_x, window_y) = capture_window_by_title(&settings.window_title, screenshot_path)?;
-
-    let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR)
-        .map_err(|e| AppError::ImageProcessing(format!("Failed to load screenshot: {}", e)))?;
-    
-    if image.empty() {
-        return Err(AppError::ImageProcessing("Loaded image is empty".to_string()));
-    }
-
-    let detections = detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
-    
-    println!("Found {} objects:", detections.len());
-    for detection in &detections {
-        println!(
-            "- {} at ({}, {}) with confidence {:.2}",
-            detection.object_name,
-            detection.location.x,
-            detection.location.y,
-            detection.confidence
-        );
-    }
-
-    detector.draw_detections(&mut image, &detections)?;
-    imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
-    println!("Result saved to result.png");
-
     let (conn, screen_num) = x11rb::connect(None)?;
     let root = conn.setup().roots[screen_num].root;
 
-    for (name, objects) in group_detections_by_name(detections) {
-        let mut filtered_objects: Vec<_> = objects.into_iter()
-            .filter(|obj| obj.object_name != "Empty")
-            .collect();
+    loop {
+        let screenshot_path = "screenshot.png";
+        let (window_x, window_y) = capture_window_by_title(&settings.window_title, screenshot_path)?;
 
-        if filtered_objects.len() >= 2 {
-            filtered_objects.sort_by(|a, b| a.location.x.cmp(&b.location.x));
-            
-            let mut connected_objects = Vec::new();
-            
-            for i in 0..filtered_objects.len() - 1 {
-                if connected_objects.contains(&i) {
-                    continue;
+        let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR)
+            .map_err(|e| AppError::ImageProcessing(format!("Failed to load screenshot: {}", e)))?;
+        
+        if image.empty() {
+            return Err(AppError::ImageProcessing("Loaded image is empty".to_string()));
+        }
+
+        let detections = detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
+        
+        println!("Found {} objects:", detections.len());
+        for detection in &detections {
+            println!(
+                "- {} at ({}, {}) with confidence {:.2}",
+                detection.object_name,
+                detection.location.x,
+                detection.location.y,
+                detection.confidence
+            );
+        }
+
+        detector.draw_detections(&mut image, &detections)?;
+        imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
+        println!("Result saved to result.png");
+
+        for (name, objects) in group_detections_by_name(detections) {
+            let mut filtered_objects: Vec<_> = objects.into_iter()
+                .filter(|obj| obj.object_name != "Empty")
+                .collect();
+
+            if filtered_objects.len() >= 2 {
+                filtered_objects.sort_by(|a, b| a.location.x.cmp(&b.location.x));
+                
+                let mut connected_objects = Vec::new();
+                
+                for i in 0..filtered_objects.len() - 1 {
+                    if connected_objects.contains(&i) {
+                        continue;
+                    }
+                    
+                    let from_template = detector.templates.iter()
+                        .find(|t| t.name == filtered_objects[i].object_name)
+                        .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                    
+                    let to_template = detector.templates.iter()
+                        .find(|t| t.name == filtered_objects[i+1].object_name)
+                        .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                    
+                    let from_size = (
+                        from_template.template.cols(),
+                        from_template.template.rows()
+                    );
+                    let to_size = (
+                        to_template.template.cols(),
+                        to_template.template.rows()
+                    );
+                    
+                    let from = filtered_objects[i].location;
+                    let to = filtered_objects[i + 1].location;
+
+                    click_and_drag_with_xdotool(
+                        window_x,
+                        window_y,
+                        (from.x, from.y), 
+                        from_size,
+                        (to.x, to.y),
+                        to_size,
+                        3
+                    )?;
+                    
+                    thread::sleep(Duration::from_millis(5));
+                    
+                    connected_objects.push(i);
+                    connected_objects.push(i + 1);
                 }
-                
-                let from_template = detector.templates.iter()
-                    .find(|t| t.name == filtered_objects[i].object_name)
-                    .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-                
-                let to_template = detector.templates.iter()
-                    .find(|t| t.name == filtered_objects[i+1].object_name)
-                    .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-                
-                let from_size = (
-                    from_template.template.cols(),
-                    from_template.template.rows()
-                );
-                let to_size = (
-                    to_template.template.cols(),
-                    to_template.template.rows()
-                );
-                
-                let from = filtered_objects[i].location;
-                let to = filtered_objects[i + 1].location;
-
-                click_and_drag_with_xdotool(
-                    window_x,
-                    window_y,
-                    (from.x, from.y), 
-                    from_size,
-                    (to.x, to.y),
-                    to_size,
-                    3
-                )?;
-                
-                thread::sleep(Duration::from_millis(5));
-                
-                connected_objects.push(i);
-                connected_objects.push(i + 1);
             }
         }
+
+        if !infinite_mode {
+            break;
+        }
+
+        // Пауза между итерациями, чтобы не нагружать систему
+        thread::sleep(Duration::from_millis(250));
     }
 
     Ok(())
