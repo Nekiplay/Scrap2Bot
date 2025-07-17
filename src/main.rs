@@ -2,13 +2,12 @@ use opencv::{
     core::{self, Mat, Point, Rect, Scalar},
     imgcodecs::{self, IMREAD_COLOR},
     imgproc::{
-        self, LineTypes, THRESH_BINARY,
-        TM_CCOEFF_NORMED, FILLED, threshold,
+        self, resize, threshold, LineTypes, FILLED, INTER_LINEAR, THRESH_BINARY, TM_CCOEFF_NORMED
     },
     prelude::*,
     Result as OpenCVResult,
 };
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc, time::Instant};
 use serde::{Deserialize, Serialize};
 use std::{
     error::Error,
@@ -18,7 +17,7 @@ use std::{
     time::Duration,
     thread,
 };
-use x11rb::protocol::xproto::*;
+
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::KeyButMask;
 
@@ -144,100 +143,186 @@ struct DetectionResult {
 }
 
 struct ObjectDetector {
-    templates: Vec<ObjectTemplate>,
+    templates: Vec<Arc<ObjectTemplate>>,
+    scale_factor: f64,
 }
 
 impl ObjectDetector {
-    fn new() -> Self {
-        Self { templates: Vec::new() }
+    fn new(scale_factor: f64) -> Self {
+        Self { 
+            templates: Vec::new(),
+            scale_factor,
+        }
     }
 
     fn add_template(&mut self, name: &str, template_path: &str, threshold: f64, min_distance: f32, red: f32, green: f32, blue: f32) -> OpenCVResult<()> {
-        let template = ObjectTemplate::new(name, template_path, threshold, min_distance, red, green, blue)?;
+        let mut template = imgcodecs::imread(template_path, IMREAD_COLOR)?;
+        
+        // Масштабируем шаблон для ускорения поиска
+        if self.scale_factor != 1.0 {
+            let mut resized = Mat::default();
+            resize(
+                &template,
+                &mut resized,
+                core::Size::new(0, 0),
+                self.scale_factor,
+                self.scale_factor,
+                INTER_LINEAR,
+            )?;
+            template = resized;
+        }
+
+        let template = Arc::new(ObjectTemplate {
+            name: name.to_string(),
+            template,
+            threshold,
+            min_distance: min_distance * (self.scale_factor as f32),
+            red,
+            green,
+            blue,
+        });
+        
         self.templates.push(template);
         Ok(())
     }
 
     fn detect_objects(&self, image: &Mat) -> OpenCVResult<Vec<DetectionResult>> {
-        let mut results = Vec::new();
+        let start_time = Instant::now();
         
-        for template in &self.templates {
-            let mut result_mat = Mat::default();
-            imgproc::match_template(
+        // Масштабируем изображение для ускорения поиска
+        let mut resized = Mat::default();
+        if self.scale_factor != 1.0 {
+            resize(
                 image,
-                &template.template,
-                &mut result_mat,
-                TM_CCOEFF_NORMED,
-                &Mat::default(),
+                &mut resized,
+                core::Size::new(0, 0),
+                self.scale_factor,
+                self.scale_factor,
+                INTER_LINEAR,
             )?;
+        }
+        let image = if self.scale_factor != 1.0 { &resized } else { image };
 
-            let mut thresholded = Mat::default();
-            threshold(
-                &result_mat,
-                &mut thresholded,
-                template.threshold,
-                1.0,
-                THRESH_BINARY,
-            )?;
+        let mut handles = Vec::with_capacity(self.templates.len());
+        
+        // Запускаем поиск для каждого шаблона в отдельном потоке
+        for template in &self.templates {
+            let template = template.clone();
+            let image = image.clone();
             
-            let mut thresholded_u8 = Mat::default();
-            thresholded.convert_to(&mut thresholded_u8, opencv::core::CV_8U, 255.0, 0.0)?;
-
-            loop {
-                let mut max_val = 0.0;
-                let mut max_loc = Point::default();
+            handles.push(thread::spawn(move || {
+                let mut results = Vec::new();
                 
-                core::min_max_loc(
-                    &result_mat,
-                    None,
-                    Some(&mut max_val),
-                    None,
-                    Some(&mut max_loc),
-                    &core::no_array(),
-                )?;
-
-                if max_val < template.threshold {
-                    break;
-                }
-
-                results.push(DetectionResult {
-                    object_name: template.name.clone(),
-                    location: max_loc,
-                    confidence: max_val,
-                });
-
-                imgproc::rectangle(
+                let mut result_mat = Mat::default();
+                imgproc::match_template(
+                    &image,
+                    &template.template,
                     &mut result_mat,
-                    Rect::new(
-                        max_loc.x - template.template.cols() / 2,
-                        max_loc.y - template.template.rows() / 2,
-                        template.template.cols(),
-                        template.template.rows(),
-                    ),
-                    Scalar::all(0.0),
-                    FILLED,
-                    LineTypes::LINE_8.into(),
-                    0,
+                    TM_CCOEFF_NORMED,
+                    &Mat::default(),
                 )?;
-            }
-        }
-        
-        let mut filtered_results = Vec::new();
-        for result in results {
-            if let Some(template) = self.templates.iter().find(|t| t.name == result.object_name) {
-                let too_close = filtered_results.iter().any(|r: &DetectionResult| {
-                    let dx = (r.location.x - result.location.x) as f32;
-                    let dy = (r.location.y - result.location.y) as f32;
-                    (dx * dx + dy * dy) < template.min_distance * template.min_distance
-                });
+
+                let mut thresholded = Mat::default();
+                threshold(
+                    &result_mat,
+                    &mut thresholded,
+                    template.threshold,
+                    1.0,
+                    THRESH_BINARY,
+                )?;
                 
-                if !too_close {
-                    filtered_results.push(result);
+                loop {
+                    let mut max_val = 0.0;
+                    let mut max_loc = Point::default();
+                    
+                    core::min_max_loc(
+                        &result_mat,
+                        None,
+                        Some(&mut max_val),
+                        None,
+                        Some(&mut max_loc),
+                        &core::no_array(),
+                    )?;
+
+                    if max_val < template.threshold {
+                        break;
+                    }
+
+                    results.push(DetectionResult {
+                        object_name: template.name.clone(),
+                        location: max_loc,
+                        confidence: max_val,
+                    });
+
+                    // Затираем найденную область для поиска следующего совпадения
+                    imgproc::rectangle(
+                        &mut result_mat,
+                        Rect::new(
+                            max_loc.x - template.template.cols() / 2,
+                            max_loc.y - template.template.rows() / 2,
+                            template.template.cols(),
+                            template.template.rows(),
+                        ),
+                        Scalar::all(0.0),
+                        FILLED,
+                        LineTypes::LINE_8.into(),
+                        0,
+                    )?;
+                }
+                
+                Ok::<_, opencv::Error>(results)
+            }));
+        }
+
+        // Собираем результаты из всех потоков
+        let mut all_results = Vec::new();
+        for handle in handles {
+            let mut thread_results = handle.join().unwrap()?;
+            all_results.append(&mut thread_results);
+        }
+
+        // Фильтруем слишком близкие результаты
+        let filtered_results = self.filter_close_detections(all_results);
+        
+        // Масштабируем координаты обратно
+        let mut final_results = Vec::new();
+        for result in filtered_results {
+            final_results.push(DetectionResult {
+                object_name: result.object_name,
+                location: Point::new(
+                    (result.location.x as f64 / self.scale_factor) as i32,
+                    (result.location.y as f64 / self.scale_factor) as i32,
+                ),
+                confidence: result.confidence,
+            });
+        }
+
+        println!("Detection took: {:?}", start_time.elapsed());
+        Ok(final_results)
+    }
+
+    fn filter_close_detections(&self, mut results: Vec<DetectionResult>) -> Vec<DetectionResult> {
+        results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
+        
+        let mut filtered = Vec::new();
+        let mut occupied = Vec::new();
+        
+        for result in results {
+            let too_close = occupied.iter().any(|(center, min_dist): &(Point, f32)| {
+                let dx = (center.x - result.location.x) as f32;
+                let dy = (center.y - result.location.y) as f32;
+                (dx * dx + dy * dy).sqrt() < *min_dist
+            });
+            
+            if !too_close {
+                if let Some(template) = self.templates.iter().find(|t| t.name == result.object_name) {
+                    occupied.push((result.location, template.min_distance));
+                    filtered.push(result);
                 }
             }
         }
         
-        Ok(filtered_results)
+        filtered
     }
 
     fn draw_detections(&self, image: &mut Mat, detections: &[DetectionResult]) -> OpenCVResult<()> {
@@ -428,7 +513,7 @@ fn group_detections_by_name(detections: Vec<DetectionResult>) -> HashMap<String,
 fn main() -> AppResult<()> {
     let settings = load_settings()?;
     
-    let mut detector = ObjectDetector::new();
+    let mut detector = ObjectDetector::new(0.5);
     
     for template_settings in settings.templates {
         detector.add_template(
