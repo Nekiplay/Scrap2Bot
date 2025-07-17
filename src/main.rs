@@ -365,18 +365,23 @@ fn load_settings() -> AppResult<Settings> {
 }
 
 fn click_and_drag_with_xdotool(
-    window_x: i32, 
-    window_y: i32, 
-    from: (i32, i32), 
+    window_x: i32,
+    window_y: i32,
+    from: (i32, i32),
+    from_size: (i32, i32),  // Добавляем размеры объекта
     to: (i32, i32),
+    to_size: (i32, i32),    // Добавляем размеры объекта
     move_delay_ms: u64
 ) -> AppResult<()> {
-    let abs_from_x = window_x + from.0 + 10;
-    let abs_from_y = window_y + from.1 + 10;
-    let abs_to_x = window_x + to.0 + 10;
-    let abs_to_y = window_y + to.1 + 10;
+    // Рассчитываем центр начального объекта
+    let abs_from_x = window_x + from.0 + from_size.0 / 2;
+    let abs_from_y = window_y + from.1 + from_size.1 / 2;
+    
+    // Рассчитываем центр конечного объекта
+    let abs_to_x = window_x + to.0 + to_size.0 / 2;
+    let abs_to_y = window_y + to.1 + to_size.1 / 2;
 
-    // 1. Перемещаем курсор в начальную позицию
+    // 1. Перемещаем курсор в центр начального объекта
     Command::new("xdotool")
         .args(&["mousemove", &abs_from_x.to_string(), &abs_from_y.to_string()])
         .status()?;
@@ -388,7 +393,7 @@ fn click_and_drag_with_xdotool(
         .status()?;
     thread::sleep(Duration::from_millis(100));
 
-    // 3. Плавно перемещаем курсор с зажатой кнопкой
+    // 3. Плавно перемещаем курсор в центр конечного объекта
     let steps = 10;
     for step in 0..=steps {
         let x = abs_from_x + (abs_to_x - abs_from_x) * step as i32 / steps as i32;
@@ -408,6 +413,7 @@ fn click_and_drag_with_xdotool(
 
     Ok(())
 }
+
 
 fn group_detections_by_name(detections: Vec<DetectionResult>) -> HashMap<String, Vec<DetectionResult>> {
     let mut groups = HashMap::new();
@@ -467,7 +473,6 @@ fn main() -> AppResult<()> {
     let root = conn.setup().roots[screen_num].root;
 
     for (name, objects) in group_detections_by_name(detections) {
-        // Фильтруем объекты, исключая те, что имеют имя "Empty"
         let mut filtered_objects: Vec<_> = objects.into_iter()
             .filter(|obj| obj.object_name != "Empty")
             .collect();
@@ -482,11 +487,32 @@ fn main() -> AppResult<()> {
                     continue;
                 }
                 
+                // Получаем размеры объектов из шаблонов
+                let from_template = detector.templates.iter()
+                    .find(|t| t.name == filtered_objects[i].object_name)
+                    .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                
+                let to_template = detector.templates.iter()
+                    .find(|t| t.name == filtered_objects[i+1].object_name)
+                    .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                
+                let from_size = (from_template.template.cols(), from_template.template.rows());
+                let to_size = (to_template.template.cols(), to_template.template.rows());
+                
                 let from = filtered_objects[i].location;
                 let to = filtered_objects[i + 1].location;
+
+                click_and_drag_with_xdotool(
+                    window_x,
+                    window_y,
+                   (from.x, from.y), 
+                    from_size.into(),
+                    (to.x, to.y),
+                    to_size.into(),
+                    7 // задержка в миллисекундах между шагами перемещения
+                )?;
                 
-                click_and_drag_with_xdotool(window_x, window_y, (from.x, from.y), (to.x, to.y), 10)?;
-                thread::sleep(Duration::from_millis(500));
+                thread::sleep(Duration::from_millis(500)); // задержка между соединениями
                 
                 connected_objects.push(i);
                 connected_objects.push(i + 1);

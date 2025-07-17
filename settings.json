@@ -81,6 +81,51 @@
             "red": 217.0,
             "green": 145.0,
             "blue": 89.0
+        },
+        {
+            "name": "Barrel 9",
+            "path": "templates/9.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 217.0,
+            "green": 145.0,
+            "blue": 89.0
+        },
+        {
+            "name": "Barrel 10",
+            "path": "templates/10.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 217.0,
+            "green": 145.0,
+            "blue": 89.0
+        },
+        {
+            "name": "Barrel 11",
+            "path": "templates/11.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 217.0,
+            "green": 145.0,
+            "blue": 89.0
+        },
+        {
+            "name": "Barrel 12",
+            "path": "templates/12.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 217.0,
+            "green": 145.0,
+            "blue": 89.0
+        },
+        {
+            "name": "Barrel 13",
+            "path": "templates/13.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 217.0,
+            "green": 145.0,
+            "blue": 89.0
         }
     ]
 }
