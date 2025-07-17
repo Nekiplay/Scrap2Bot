@@ -1,0 +1,86 @@
+{
+    "window_title": "M2006C3MNG",
+    "templates": [
+        {
+            "name": "Empty",
+            "path": "templates/empty.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 0.0,
+            "green": 0.0,
+            "blue": 0.0
+        },
+        {
+            "name": "Barrel 1",
+            "path": "templates/1.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 149.0,
+            "green": 172.0,
+            "blue": 206.0
+        },
+        {
+            "name": "Barrel 2",
+            "path": "templates/2.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 255.0,
+            "green": 0.0,
+            "blue": 0.0
+        },
+        {
+            "name": "Barrel 3",
+            "path": "templates/3.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 255.0,
+            "green": 0.0,
+            "blue": 255.0
+        },
+        {
+            "name": "Barrel 4",
+            "path": "templates/4.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 142.0,
+            "green": 91.0,
+            "blue": 157.0
+        },
+        {
+            "name": "Barrel 5",
+            "path": "templates/5.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 122.0,
+            "green": 191.0,
+            "blue": 99.0
+        },
+        {
+            "name": "Barrel 6",
+            "path": "templates/6.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 114.0,
+            "green": 129.0,
+            "blue": 176.0
+        },
+        {
+            "name": "Barrel 7",
+            "path": "templates/7.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 197.0,
+            "green": 184.0,
+            "blue": 88.0
+        },
+        {
+            "name": "Barrel 8",
+            "path": "templates/8.png",
+            "threshold": 0.9,
+            "min_distance": 25.0,
+            "red": 217.0,
+            "green": 145.0,
+            "blue": 89.0
+        }
+    ]
+}
