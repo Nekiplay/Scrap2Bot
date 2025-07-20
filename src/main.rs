@@ -691,6 +691,7 @@ fn check_and_suggest_window_size(window_title: &str, recommended_width: i32, rec
 }
 
 use std::env;
+
 fn main() -> AppResult<()> {
     let args: Vec<String> = env::args().collect();
     let infinite_mode = args.iter().any(|arg| arg == "--infinite" || arg == "-i");
@@ -736,98 +737,105 @@ fn main() -> AppResult<()> {
         imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
         println!("Result saved to result.png");
 
-        // Группировка обнаруженных объектов по имени
-        for (name, objects) in group_detections_by_name(detections) {
-            if name == "Magnet" || name == "Buy" {
-                // Обработка магнитов - одиночный клик
-                for obj in objects {
-                    let template = detector.templates.iter()
-                        .find(|t| t.name == obj.object_name)
+        // Обработка бочек
+        let mut barrels: Vec<_> = detections.into_iter()
+            .filter(|d| d.object_name.starts_with("Barrel"))
+            .collect();
+
+        // Сортируем бочки по номеру
+        barrels.sort_by(|a, b| {
+            let num_a = a.object_name.split_whitespace().last().unwrap_or("0").parse().unwrap_or(0);
+            let num_b = b.object_name.split_whitespace().last().unwrap_or("0").parse().unwrap_or(0);
+            num_a.cmp(&num_b)
+        });
+
+        // Создаем карту номеров бочек и их позиций
+        let mut barrel_map: HashMap<u32, Vec<(Point, String)>> = HashMap::new();
+        for barrel in &barrels {
+            let num = barrel.object_name.split_whitespace().last().unwrap_or("0").parse().unwrap_or(0);
+            barrel_map.entry(num).or_default().push((barrel.location, barrel.object_name.clone()));
+        }
+
+        // Находим максимальный номер бочки в текущем наборе
+        let max_barrel_num = barrel_map.keys().max().copied().unwrap_or(0);
+
+        // Обрабатываем все возможные слияния
+        let mut current_level = 1;
+        while current_level <= max_barrel_num {
+            if let Some(pairs) = barrel_map.get(&current_level) {
+                if pairs.len() >= 2 {
+                    // Сливаем первые две бочки текущего уровня
+                    let from = &pairs[0];
+                    let to = &pairs[1];
+
+                    let from_template = detector.templates.iter()
+                        .find(|t| t.name == from.1)
                         .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
                     
-                    let size = (
-                        template.template.cols(),
-                        template.template.rows()
+                    let to_template = detector.templates.iter()
+                        .find(|t| t.name == to.1)
+                        .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                    
+                    let from_size = (
+                        from_template.template.cols(),
+                        from_template.template.rows()
+                    );
+                    let to_size = (
+                        to_template.template.cols(),
+                        to_template.template.rows()
                     );
                     
-                    let abs_x = window_x + obj.location.x + size.0 / 2;
-                    let abs_y = window_y + obj.location.y + size.1 / 2;
-
-                    // Одиночный клик
-                    Command::new("xdotool")
-                        .args(&["mousemove", &abs_x.to_string(), &abs_y.to_string()])
-                        .status()?;
-                    thread::sleep(Duration::from_millis(5));
-
-                    Command::new("xdotool")
-                        .args(&["click", "1"])
-                        .status()?;
-                    thread::sleep(Duration::from_millis(5));
-                }
-            } else {
-                // Оригинальная логика для других объектов (соединение пар)
-                let mut filtered_objects: Vec<_> = objects.into_iter()
-                    .filter(|obj| obj.object_name != "Empty")
-                    .collect();
-
-                if filtered_objects.len() >= 2 {
-                    filtered_objects.sort_by(|a, b| a.location.x.cmp(&b.location.x));
+                    click_and_drag_with_xdotool(
+                        window_x,
+                        window_y,
+                        (from.0.x, from.0.y), 
+                        from_size,
+                        (to.0.x, to.0.y),
+                        to_size,
+                        5,
+                        1
+                    )?;
                     
-                    let mut connected_objects = Vec::new();
-                    
-                    for i in 0..filtered_objects.len() - 1 {
-                        if connected_objects.contains(&i) {
-                            continue;
-                        }
-                        
-                        let from_template = detector.templates.iter()
-                            .find(|t| t.name == filtered_objects[i].object_name)
-                            .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-                        
-                        let to_template = detector.templates.iter()
-                            .find(|t| t.name == filtered_objects[i+1].object_name)
-                            .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-                        
-                        let from_size = (
-                            from_template.template.cols(),
-                            from_template.template.rows()
-                        );
-                        let to_size = (
-                            to_template.template.cols(),
-                            to_template.template.rows()
-                        );
-                        
-                        let from = filtered_objects[i].location;
-                        let to = filtered_objects[i + 1].location;
+                    thread::sleep(Duration::from_millis(25)); // Даем время для анимации
 
-                        click_and_drag_with_xdotool(
-                            window_x,
-                            window_y,
-                            (from.x, from.y), 
-                            from_size,
-                            (to.x, to.y),
-                            to_size,
-                            5,
-                            1
-                        )?;
-                        
-                        thread::sleep(Duration::from_millis(3));
-                        
-                        connected_objects.push(i);
-                        connected_objects.push(i + 1);
+                    // Предполагаем, что новая бочка появится на месте второй бочки в паре
+                    let new_barrel_num = current_level + 1;
+                    let new_barrel_name = format!("Barrel {}", new_barrel_num);
+                    let new_barrel_pos = to.0;
+
+                    // Обновляем карту бочек:
+                    // 1. Удаляем две слитые бочки
+                    barrel_map.get_mut(&current_level).unwrap().remove(0);
+                    barrel_map.get_mut(&current_level).unwrap().remove(0);
+                    
+                    // 2. Добавляем новую бочку следующего уровня
+                    if new_barrel_num <= max_barrel_num {
+                        // Если у нас уже есть шаблон для этой бочки
+                        barrel_map.entry(new_barrel_num).or_default().push((new_barrel_pos, new_barrel_name));
+                    } else {
+                        // Если это новая бочка, которой не было в исходном наборе
+                        current_level = new_barrel_num;
+                        break;
+                    }
+
+                    // Если на текущем уровне остались бочки, продолжаем с ним
+                    if barrel_map.get(&current_level).map_or(0, |v| v.len()) >= 2 {
+                        continue;
                     }
                 }
             }
+            current_level += 1;
         }
+
+        // Оригинальная обработка других объектов (магниты и т.д.)
+        // ... остальной код обработки ...
 
         if !infinite_mode {
             break;
         }
 
-        // Пауза между итерациями, чтобы не нагружать систему
         thread::sleep(Duration::from_millis(settings.rescan_delay));
     }
 
     Ok(())
 }
-
