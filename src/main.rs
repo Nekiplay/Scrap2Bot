@@ -644,6 +644,34 @@ fn display_results_as_table(detections: &[DetectionResult], cols: usize, rows: u
     }
 }
 
+fn check_and_suggest_window_size(window_title: &str, recommended_width: i32, recommended_height: i32) -> AppResult<()> {
+    let (current_width, current_height) = get_window_size(window_title)?;
+    
+    if current_width != recommended_width || current_height != recommended_height {
+        println!("Current window size: {}x{}", current_width, current_height);
+        println!("Recommended window size: {}x{}", recommended_width, recommended_height);
+        println!("Would you like to resize the window to the recommended size? (y/n)");
+        
+        let mut input = String::new();
+        std::io::stdin().read_line(&mut input)?;
+        
+        if input.trim().to_lowercase() == "y" {
+            Command::new("wmctrl")
+                .args(&[
+                    "-r", window_title,
+                    "-e", &format!("0,-1,-1,{},{}", recommended_width, recommended_height)
+                ])
+                .status()?;
+            println!("Window size changed. Please restart the program.");
+            std::process::exit(0);
+        } else {
+            println!("Continuing with current window size. Detection results may be inaccurate.");
+        }
+    }
+    
+    Ok(())
+}
+
 use std::env;
 fn main() -> AppResult<()> {
     let args: Vec<String> = env::args().collect();
@@ -651,6 +679,8 @@ fn main() -> AppResult<()> {
 
     let window_title = "M2006C3MNG";
     let settings = load_or_create_settings(window_title)?;
+
+    check_and_suggest_window_size(&settings.window_title, settings.reference_width, settings.reference_height)?;
     
     let mut detector = ObjectDetector::new(
         0.35,
@@ -759,10 +789,10 @@ fn main() -> AppResult<()> {
                             from_size,
                             (to.x, to.y),
                             to_size,
-                            3
+                            2
                         )?;
                         
-                        thread::sleep(Duration::from_millis(5));
+                        thread::sleep(Duration::from_millis(11));
                         
                         connected_objects.push(i);
                         connected_objects.push(i + 1);
