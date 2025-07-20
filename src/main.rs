@@ -19,12 +19,10 @@ use std::{
     thread,
 };
 
-use x11rb::connection::Connection;
-use x11rb::protocol::xproto::KeyButMask;
-
 #[derive(Debug, Deserialize, Serialize)]
 struct Settings {
     window_title: String,
+    rescan_delay: u64,
     reference_width: i32,
     reference_height: i32,
     convert_to_grayscale: bool,
@@ -471,6 +469,7 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
         
         let settings = Settings {
             window_title: window_title.to_string(),
+            rescan_delay: 250,
             reference_width: width,
             reference_height: height,
             convert_to_grayscale: true,
@@ -671,9 +670,6 @@ fn main() -> AppResult<()> {
         )?;
     }
 
-    let (conn, screen_num) = x11rb::connect(None)?;
-    let root = conn.setup().roots[screen_num].root;
-
     loop {
         let screenshot_path = "screenshot.png";
         let (window_x, window_y) = capture_window_by_title(&settings.window_title, screenshot_path)?;
@@ -694,7 +690,7 @@ fn main() -> AppResult<()> {
 
         // Группировка обнаруженных объектов по имени
         for (name, objects) in group_detections_by_name(detections) {
-            if name == "Magnet" {
+            if name == "Magnet" || name == "Buy" {
                 // Обработка магнитов - одиночный клик
                 for obj in objects {
                     let template = detector.templates.iter()
@@ -780,7 +776,7 @@ fn main() -> AppResult<()> {
         }
 
         // Пауза между итерациями, чтобы не нагружать систему
-        thread::sleep(Duration::from_millis(350));
+        thread::sleep(Duration::from_millis(settings.rescan_delay));
     }
 
     Ok(())
