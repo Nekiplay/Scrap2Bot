@@ -737,7 +737,6 @@ fn main() -> AppResult<()> {
         imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
         println!("Result saved to result.png");
 
-        // Обработка бочек
         let mut barrels: Vec<_> = detections.into_iter()
             .filter(|d| d.object_name.starts_with("Barrel"))
             .collect();
@@ -756,75 +755,78 @@ fn main() -> AppResult<()> {
             barrel_map.entry(num).or_default().push((barrel.location, barrel.object_name.clone()));
         }
 
-        // Находим максимальный номер бочки в текущем наборе
-        let max_barrel_num = barrel_map.keys().max().copied().unwrap_or(0);
+        // Находим все уровни бочек, которые есть в текущем наборе
+        let mut available_levels: Vec<u32> = barrel_map.keys().copied().collect();
+        available_levels.sort();
 
-        // Обрабатываем все возможные слияния
-        let mut current_level = 1;
-        while current_level <= max_barrel_num {
-            if let Some(pairs) = barrel_map.get(&current_level) {
-                if pairs.len() >= 2 {
-                    // Сливаем первые две бочки текущего уровня
-                    let from = &pairs[0];
-                    let to = &pairs[1];
+        // Обрабатываем слияния начиная с самого младшего уровня
+        let mut changed = true;
+        while changed {
+            changed = false;
+            
+            for &level in &available_levels {
+                // Получаем количество бочек текущего уровня
+                let barrel_count = barrel_map.get(&level).map_or(0, |v| v.len());
+                
+                if barrel_count >= 2 {
+                    // Проверяем, есть ли шаблон для бочки следующего уровня
+                    let next_level = level + 1;
+                    let has_next_level_template = detector.templates.iter()
+                        .any(|t| t.name == format!("Barrel {}", next_level));
 
-                    let from_template = detector.templates.iter()
-                        .find(|t| t.name == from.1)
-                        .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-                    
-                    let to_template = detector.templates.iter()
-                        .find(|t| t.name == to.1)
-                        .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-                    
-                    let from_size = (
-                        from_template.template.cols(),
-                        from_template.template.rows()
-                    );
-                    let to_size = (
-                        to_template.template.cols(),
-                        to_template.template.rows()
-                    );
-                    
-                    click_and_drag_with_xdotool(
-                        window_x,
-                        window_y,
-                        (from.0.x, from.0.y), 
-                        from_size,
-                        (to.0.x, to.0.y),
-                        to_size,
-                        5,
-                        1
-                    )?;
-                    
-                    thread::sleep(Duration::from_millis(25)); // Даем время для анимации
+                    // Сливаем только если есть шаблон для следующего уровня
+                    if has_next_level_template {
+                        // Получаем данные о бочках (копируем необходимые данные)
+                        let first_barrel = barrel_map[&level][0].clone();
+                        let second_barrel = barrel_map[&level][1].clone();
 
-                    // Предполагаем, что новая бочка появится на месте второй бочки в паре
-                    let new_barrel_num = current_level + 1;
-                    let new_barrel_name = format!("Barrel {}", new_barrel_num);
-                    let new_barrel_pos = to.0;
+                        let from_template = detector.templates.iter()
+                            .find(|t| t.name == first_barrel.1)
+                            .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                        
+                        let to_template = detector.templates.iter()
+                            .find(|t| t.name == second_barrel.1)
+                            .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                        
+                        let from_size = (
+                            from_template.template.cols(),
+                            from_template.template.rows()
+                        );
+                        let to_size = (
+                            to_template.template.cols(),
+                            to_template.template.rows()
+                        );
+                        
+                        click_and_drag_with_xdotool(
+                            window_x,
+                            window_y,
+                            (first_barrel.0.x, first_barrel.0.y), 
+                            from_size,
+                            (second_barrel.0.x, second_barrel.0.y),
+                            to_size,
+                            5,
+                            1
+                        )?;
+                        
+                        thread::sleep(Duration::from_millis(25));
 
-                    // Обновляем карту бочек:
-                    // 1. Удаляем две слитые бочки
-                    barrel_map.get_mut(&current_level).unwrap().remove(0);
-                    barrel_map.get_mut(&current_level).unwrap().remove(0);
-                    
-                    // 2. Добавляем новую бочку следующего уровня
-                    if new_barrel_num <= max_barrel_num {
-                        // Если у нас уже есть шаблон для этой бочки
-                        barrel_map.entry(new_barrel_num).or_default().push((new_barrel_pos, new_barrel_name));
-                    } else {
-                        // Если это новая бочка, которой не было в исходном наборе
-                        current_level = new_barrel_num;
-                        break;
-                    }
+                        // Обновляем карту бочек:
+                        // 1. Удаляем две слитые бочки
+                        barrel_map.get_mut(&level).unwrap().remove(0);
+                        barrel_map.get_mut(&level).unwrap().remove(0);
+                        
+                        // 2. Добавляем новую бочку следующего уровня
+                        barrel_map.entry(next_level).or_default().push((second_barrel.0, format!("Barrel {}", next_level)));
 
-                    // Если на текущем уровне остались бочки, продолжаем с ним
-                    if barrel_map.get(&current_level).map_or(0, |v| v.len()) >= 2 {
-                        continue;
+                        // Обновляем список доступных уровней
+                        available_levels = barrel_map.keys().copied().collect();
+                        available_levels.sort();
+
+                        changed = true;
+                        break; // Начинаем проверку снова с младшего уровня
                     }
                 }
             }
-            current_level += 1;
         }
 
         // Оригинальная обработка других объектов (магниты и т.д.)
