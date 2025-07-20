@@ -22,6 +22,7 @@ use std::{
 #[derive(Debug, Deserialize, Serialize)]
 struct Settings {
     window_title: String,
+    resolution: f64,
     rescan_delay: u64,
     reference_width: i32,
     reference_height: i32,
@@ -469,6 +470,7 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
         
         let settings = Settings {
             window_title: window_title.to_string(),
+            resolution: 0.38,
             rescan_delay: 250,
             reference_width: width,
             reference_height: height,
@@ -524,6 +526,7 @@ fn click_and_drag_with_xdotool(
     from_size: (i32, i32),
     to: (i32, i32),
     to_size: (i32, i32),
+    steps: i32,
     move_delay_ms: u64
 ) -> AppResult<()> {
     let original_pos = Command::new("xdotool")
@@ -558,7 +561,6 @@ fn click_and_drag_with_xdotool(
         .status()?;
     thread::sleep(Duration::from_millis(5));
 
-    let steps = 3;
     for step in 0..=steps {
         let x = abs_from_x + (abs_to_x - abs_from_x) * step as i32 / steps as i32;
         let y = abs_from_y + (abs_to_y - abs_from_y) * step as i32 / steps as i32;
@@ -568,7 +570,7 @@ fn click_and_drag_with_xdotool(
             .status()?;
         thread::sleep(Duration::from_millis(move_delay_ms));
     }
-
+    thread::sleep(Duration::from_millis(5));
     Command::new("xdotool")
         .args(&["mouseup", "1"])
         .status()?;
@@ -647,9 +649,24 @@ fn display_results_as_table(detections: &[DetectionResult], cols: usize, rows: u
 fn check_and_suggest_window_size(window_title: &str, recommended_width: i32, recommended_height: i32) -> AppResult<()> {
     let (current_width, current_height) = get_window_size(window_title)?;
     
-    if current_width != recommended_width || current_height != recommended_height {
+    // Define tolerance (5 pixels in each direction)
+    const TOLERANCE: i32 = 5;
+    let width_diff = (current_width - recommended_width).abs();
+    let height_diff = (current_height - recommended_height).abs();
+    
+    if width_diff > TOLERANCE || height_diff > TOLERANCE {
         println!("Current window size: {}x{}", current_width, current_height);
-        println!("Recommended window size: {}x{}", recommended_width, recommended_height);
+        println!("Recommended window size: {}x{} (with ±{}px tolerance)", 
+                recommended_width, recommended_height, TOLERANCE);
+        
+        // Show exact difference information
+        if width_diff > TOLERANCE {
+            println!("Width difference: {}px (tolerance: {}px)", width_diff, TOLERANCE);
+        }
+        if height_diff > TOLERANCE {
+            println!("Height difference: {}px (tolerance: {}px)", height_diff, TOLERANCE);
+        }
+        
         println!("Would you like to resize the window to the recommended size? (y/n)");
         
         let mut input = String::new();
@@ -662,10 +679,11 @@ fn check_and_suggest_window_size(window_title: &str, recommended_width: i32, rec
                     "-e", &format!("0,-1,-1,{},{}", recommended_width, recommended_height)
                 ])
                 .status()?;
-            println!("Window size changed. Please restart the program.");
+            println!("Window size changed to {}x{}. Please restart the program.", 
+                   recommended_width, recommended_height);
             std::process::exit(0);
         } else {
-            println!("Continuing with current window size. Detection results may be inaccurate.");
+            println!("Continuing with current window size. Detection results may be less accurate.");
         }
     }
     
@@ -683,7 +701,7 @@ fn main() -> AppResult<()> {
     check_and_suggest_window_size(&settings.window_title, settings.reference_width, settings.reference_height)?;
     
     let mut detector = ObjectDetector::new(
-        0.35,
+        settings.resolution,
         settings.reference_width,
         settings.reference_height
     );
@@ -789,10 +807,11 @@ fn main() -> AppResult<()> {
                             from_size,
                             (to.x, to.y),
                             to_size,
-                            2
+                            5,
+                            1
                         )?;
                         
-                        thread::sleep(Duration::from_millis(11));
+                        thread::sleep(Duration::from_millis(3));
                         
                         connected_objects.push(i);
                         connected_objects.push(i + 1);
