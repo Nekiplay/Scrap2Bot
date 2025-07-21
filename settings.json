@@ -6,17 +6,17 @@
   "rescan_delay": 175,
   "random_offset": {
     "enabled": true,
-    "max_x_offset": 25,
-    "max_y_offset": 25
+    "max_x_offset": 17,
+    "max_y_offset": 17
   },
   "human_like_movement": {
     "enabled": true,
-    "max_deviation": 0.34,
-    "speed_variation": 0.6,
-    "curve_smoothness": 14,
+    "max_deviation": 0.24,
+    "speed_variation": 0.33,
+    "curve_smoothness": 12,
     "min_pause_ms": 1,
     "max_pause_ms": 3,
-    "base_speed": 0.195
+    "base_speed": 0.145
   },
   "convert_to_grayscale": false,
   "templates": [
@@ -644,6 +644,24 @@
         {
             "name": "Barrel 69",
             "path": "templates/barrels/69.png",
+            "threshold": 0.88,
+            "min_distance": 25.0,
+            "red": 217.0,
+            "green": 145.0,
+            "blue": 89.0
+        },
+        {
+            "name": "Barrel 70",
+            "path": "templates/barrels/70.png",
+            "threshold": 0.88,
+            "min_distance": 25.0,
+            "red": 217.0,
+            "green": 145.0,
+            "blue": 89.0
+        },
+        {
+            "name": "Barrel 71",
+            "path": "templates/barrels/71.png",
             "threshold": 0.88,
             "min_distance": 25.0,
             "red": 217.0,

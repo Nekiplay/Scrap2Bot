@@ -876,9 +876,34 @@ fn check_and_suggest_window_size(window_title: &str, recommended_width: i32, rec
 
 use std::env;
 
+fn is_cursor_in_window(window_x: i32, window_y: i32, window_width: i32, window_height: i32) -> AppResult<bool> {
+    let output = Command::new("xdotool")
+        .args(&["getmouselocation", "--shell"])
+        .output()?;
+    
+    let output_str = String::from_utf8(output.stdout)?;
+    let mut cursor_x = 0;
+    let mut cursor_y = 0;
+    
+    for line in output_str.lines() {
+        if line.starts_with("X=") {
+            cursor_x = line[2..].parse().unwrap_or(0);
+        } else if line.starts_with("Y=") {
+            cursor_y = line[2..].parse().unwrap_or(0);
+        }
+    }
+
+    Ok(cursor_x >= window_x && 
+       cursor_x <= window_x + window_width && 
+       cursor_y >= window_y && 
+       cursor_y <= window_y + window_height)
+}
+
 fn process_barrels(
     window_x: i32,
     window_y: i32,
+    window_width: i32,
+    window_height: i32,
     mut barrels: Vec<DetectionResult>,
     detector: &mut ObjectDetector,
     settings: &Settings,
@@ -975,13 +1000,13 @@ fn process_barrels(
                 .status()?;
             
             // Небольшая пауза перед началом перемещения
-            thread::sleep(Duration::from_millis(rng.gen_range(2..5)));
+            thread::sleep(Duration::from_millis(rng.gen_range(5..12)));
 
             // Перемещаемся к конечной точке
             human_like_move(abs_to_x, abs_to_y, &settings.human_like_movement)?;
 
             // Небольшая пауза перед отпусканием
-            thread::sleep(Duration::from_millis(rng.gen_range(2..5)));
+            thread::sleep(Duration::from_millis(rng.gen_range(6..12)));
             
             // Отпускаем кнопку мыши
             Command::new("xdotool")
@@ -1009,6 +1034,7 @@ fn process_barrels(
 
     Ok((barrels, (original_x, original_y)))
 }
+
 
 fn main() -> AppResult<()> {
     let args: Vec<String> = env::args().collect();
@@ -1040,6 +1066,9 @@ fn main() -> AppResult<()> {
     loop {
         let screenshot_path = "screenshot.png";
         let (window_x, window_y) = capture_window_by_title(&settings.window_title, screenshot_path)?;
+        let (window_width, window_height) = get_window_size(&settings.window_title)?;
+
+        let is_on_window = is_cursor_in_window(window_x, window_y, window_width, window_height)?;
 
         let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR)
             .map_err(|e| AppError::ImageProcessing(format!("Failed to load screenshot: {}", e)))?;
@@ -1055,7 +1084,6 @@ fn main() -> AppResult<()> {
         imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
         println!("Result saved to result.png");
 
-        
         // Обработка бочек
         let mut barrels: Vec<DetectionResult> = detections.into_iter()
             .filter(|d| d.object_name.starts_with("Barrel"))
@@ -1071,12 +1099,19 @@ fn main() -> AppResult<()> {
         let (barrels, (original_x, original_y)) = process_barrels(
             window_x,
             window_y,
+            window_width,
+            window_height,
             barrels,
             &mut detector,
             &settings,
         )?;
-        human_like_move(original_x, original_y, &settings.human_like_movement)?;
 
+        if !is_on_window && settings.human_like_movement.enabled {
+            human_like_move(original_x, original_y, &settings.human_like_movement)?;
+        }
+        else if !&settings.human_like_movement.enabled {
+             human_like_move(original_x, original_y, &settings.human_like_movement)?;
+        }
         if !infinite_mode {
             break;
         }
