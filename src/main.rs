@@ -1066,9 +1066,6 @@ fn main() -> AppResult<()> {
     loop {
         let screenshot_path = "screenshot.png";
         let (window_x, window_y) = capture_window_by_title(&settings.window_title, screenshot_path)?;
-        let (window_width, window_height) = get_window_size(&settings.window_title)?;
-
-        let is_on_window = is_cursor_in_window(window_x, window_y, window_width, window_height)?;
 
         let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR)
             .map_err(|e| AppError::ImageProcessing(format!("Failed to load screenshot: {}", e)))?;
@@ -1078,6 +1075,11 @@ fn main() -> AppResult<()> {
         }
 
         let detections = detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
+
+        let (window_width, window_height) = get_window_size(&settings.window_title)?;
+
+        let is_on_window = is_cursor_in_window(window_x, window_y, window_width, window_height)?;
+
         display_results_as_table(&detections, 4, 5);
 
         detector.draw_detections(&mut image, &detections)?;
