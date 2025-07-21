@@ -1,3 +1,5 @@
+use rand::Rng;
+use std::f64::consts::PI;
 use opencv::{
     core::{self, AlgorithmHint, Mat, Point, Rect, Scalar, Size, Vector},
     imgcodecs::{self, IMREAD_COLOR},
@@ -28,6 +30,26 @@ struct Settings {
     reference_height: i32,
     convert_to_grayscale: bool,
     templates: Vec<TemplateSettings>,
+    random_offset: RandomOffsetSettings,
+    human_like_movement: HumanLikeMovementSettings,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct RandomOffsetSettings {
+    enabled: bool,
+    max_x_offset: i32,
+    max_y_offset: i32,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct HumanLikeMovementSettings {
+    enabled: bool,
+    max_deviation: f64,       // Максимальное отклонение от прямой линии (в пикселях)
+    speed_variation: f64,     // Вариация скорости (0.0 - 1.0)
+    curve_smoothness: usize,  // Количество промежуточных точек для кривой
+    min_pause_ms: u64,        // Минимальная пауза между движениями
+    max_pause_ms: u64,        // Максимальная пауза между движениями
+    base_speed: f64
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -475,6 +497,20 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
             reference_width: width,
             reference_height: height,
             convert_to_grayscale: true,
+            random_offset: RandomOffsetSettings {
+                enabled: true,
+                max_x_offset: 5,
+                max_y_offset: 5,
+            },
+            human_like_movement: HumanLikeMovementSettings { // Добавлено
+                enabled: true,
+                max_deviation: 10.0,
+                speed_variation: 0.3,
+                curve_smoothness: 5,
+                min_pause_ms: 10,
+                max_pause_ms: 50,
+                base_speed: 0.1
+            },
             templates: Vec::new(),
         };
         
@@ -519,6 +555,133 @@ fn get_window_size(window_title: &str) -> AppResult<(i32, i32)> {
     Ok((width, height))
 }
 
+// Функция для генерации кривой Безье с человеческими характеристиками
+fn generate_human_like_path(
+    start: (i32, i32),
+    end: (i32, i32),
+    settings: &HumanLikeMovementSettings,
+) -> Vec<(i32, i32)> {
+    let mut rng = rand::thread_rng();
+    let mut path = Vec::new();
+
+    if !settings.enabled {
+        path.push(start);
+        path.push(end);
+        return path;
+    }
+
+    // Добавляем начальную точку
+    path.push(start);
+
+    // Создаем контрольные точки для кривой Безье
+    let dx = end.0 - start.0;
+    let dy = end.1 - start.1;
+    let distance = ((dx * dx + dy * dy) as f64).sqrt();
+
+    // Количество промежуточных точек
+    let num_points = settings.curve_smoothness.max(2);
+    
+    // Генерируем небольшие отклонения
+    for i in 1..num_points {
+        let t = i as f64 / num_points as f64;
+        
+        // Базовое линейное перемещение
+        let x = start.0 as f64 + dx as f64 * t;
+        let y = start.1 as f64 + dy as f64 * t;
+        
+        // Добавляем случайное отклонение
+        let deviation_scale = (t * PI).sin().abs() * settings.max_deviation;
+        let dev_x = rng.gen_range(-deviation_scale..deviation_scale);
+        let dev_y = rng.gen_range(-deviation_scale..deviation_scale);
+        
+        path.push((
+            (x + dev_x).round() as i32,
+            (y + dev_y).round() as i32,
+        ));
+    }
+
+    // Добавляем конечную точку
+    path.push(end);
+
+    path
+}
+
+// Модифицированная функция перемещения
+fn human_like_move(
+    x: i32,
+    y: i32,
+    settings: &HumanLikeMovementSettings,
+) -> AppResult<()> {
+    let mut rng = rand::thread_rng();
+
+    if !settings.enabled {
+        Command::new("xdotool")
+            .args(&["mousemove", &x.to_string(), &y.to_string()])
+            .status()?;
+        return Ok(());
+    }
+
+    // Получаем текущую позицию курсора
+    let output = Command::new("xdotool")
+        .args(&["getmouselocation", "--shell"])
+        .output()?;
+    
+    let output_str = String::from_utf8(output.stdout)?;
+    let mut current_x = 0;
+    let mut current_y = 0;
+    
+    for line in output_str.lines() {
+        if line.starts_with("X=") {
+            current_x = line[2..].parse().unwrap_or(0);
+        } else if line.starts_with("Y=") {
+            current_y = line[2..].parse().unwrap_or(0);
+        }
+    }
+
+    // Генерируем путь
+    let path = generate_human_like_path(
+        (current_x, current_y),
+        (x, y),
+        settings,
+    );
+
+    // Двигаемся по пути с переменной скоростью
+    for i in 0..path.len() - 1 {
+        let (from_x, from_y) = path[i];
+        let (to_x, to_y) = path[i + 1];
+        
+        // Вычисляем расстояние между точками
+        let dx = to_x - from_x;
+        let dy = to_y - from_y;
+        let distance = ((dx * dx + dy * dy) as f64).sqrt();
+        
+        // Базовое время движения (миллисекунды на пиксель)
+        let base_speed = 0.1 + rng.gen_range(-settings.speed_variation..settings.speed_variation);
+        let move_time = (distance * base_speed).max(1.0) as u64;
+        
+        // Плавное перемещение между точками
+        Command::new("xdotool")
+            .args(&[
+                "mousemove_relative",
+                "--",
+                &dx.to_string(),
+                &dy.to_string(),
+            ])
+            .status()?;
+        
+        // Случайная пауза для имитации человеческой реакции
+        if i < path.len() - 2 {
+            let pause_time = rng.gen_range(settings.min_pause_ms..settings.max_pause_ms);
+            thread::sleep(Duration::from_millis(pause_time));
+        }
+        
+        thread::sleep(Duration::from_millis(move_time));
+    }
+
+    Ok(())
+}
+
+// Обновленная функция click_and_drag_with_xdotool
 fn click_and_drag_with_xdotool(
     window_x: i32,
     window_y: i32,
@@ -526,9 +689,11 @@ fn click_and_drag_with_xdotool(
     from_size: (i32, i32),
     to: (i32, i32),
     to_size: (i32, i32),
-    steps: i32,
-    move_delay_ms: u64
+    settings: &Settings,
 ) -> AppResult<()> {
+    let mut rng = rand::thread_rng();
+
+    // Получаем текущую позицию курсора
     let original_pos = Command::new("xdotool")
         .args(&["getmouselocation", "--shell"])
         .output()?;
@@ -545,40 +710,59 @@ fn click_and_drag_with_xdotool(
         }
     }
 
-    let abs_from_x = window_x + from.0 + from_size.0 / 2;
-    let abs_from_y = window_y + from.1 + from_size.1 / 2;
+    // Вычисляем целевые позиции с учетом случайного смещения
+    let (from_offset_x, from_offset_y) = if settings.random_offset.enabled {
+        (
+            rng.gen_range(-settings.random_offset.max_x_offset..=settings.random_offset.max_x_offset),
+            rng.gen_range(-settings.random_offset.max_y_offset..=settings.random_offset.max_y_offset),
+        )
+    } else {
+        (0, 0)
+    };
+
+    let (to_offset_x, to_offset_y) = if settings.random_offset.enabled {
+        (
+            rng.gen_range(-settings.random_offset.max_x_offset..=settings.random_offset.max_x_offset),
+            rng.gen_range(-settings.random_offset.max_y_offset..=settings.random_offset.max_y_offset),
+        )
+    } else {
+        (0, 0)
+    };
+
+    let abs_from_x = window_x + from.0 + from_size.0 / 2 + from_offset_x;
+    let abs_from_y = window_y + from.1 + from_size.1 / 2 + from_offset_y;
     
-    let abs_to_x = window_x + to.0 + to_size.0 / 2;
-    let abs_to_y = window_y + to.1 + to_size.1 / 2;
+    let abs_to_x = window_x + to.0 + to_size.0 / 2 + to_offset_x;
+    let abs_to_y = window_y + to.1 + to_size.1 / 2 + to_offset_y;
 
-    Command::new("xdotool")
-        .args(&["mousemove", &abs_from_x.to_string(), &abs_from_y.to_string()])
-        .status()?;
-    thread::sleep(Duration::from_millis(move_delay_ms));
+    // Перемещаемся к начальной точке с человеческим паттерном
+    human_like_move(abs_from_x, abs_from_y, &settings.human_like_movement)?;
+    
+    // Небольшая пауза перед кликом
+    thread::sleep(Duration::from_millis(rng.gen_range(2..8)));
 
+    // Нажимаем кнопку мыши
     Command::new("xdotool")
         .args(&["mousedown", "1"])
         .status()?;
-    thread::sleep(Duration::from_millis(5));
+    
+    // Небольшая пауза перед началом перемещения
+    thread::sleep(Duration::from_millis(rng.gen_range(2..8)));
 
-    for step in 0..=steps {
-        let x = abs_from_x + (abs_to_x - abs_from_x) * step as i32 / steps as i32;
-        let y = abs_from_y + (abs_to_y - abs_from_y) * step as i32 / steps as i32;
-        
-        Command::new("xdotool")
-            .args(&["mousemove", &x.to_string(), &y.to_string()])
-            .status()?;
-        thread::sleep(Duration::from_millis(move_delay_ms));
-    }
-    thread::sleep(Duration::from_millis(5));
+    // Перемещаемся к конечной точке с человеческим паттерном
+    human_like_move(abs_to_x, abs_to_y, &settings.human_like_movement)?;
+
+    // Небольшая пауза перед отпусканием
+    thread::sleep(Duration::from_millis(rng.gen_range(2..8)));
+    
+    // Отпускаем кнопку мыши
     Command::new("xdotool")
         .args(&["mouseup", "1"])
         .status()?;
-    thread::sleep(Duration::from_millis(5));
+    
+    // Возвращаем курсор на исходную позицию
+    human_like_move(x, y, &settings.human_like_movement)?;
 
-    Command::new("xdotool")
-        .args(&["mousemove", &x.to_string(), &y.to_string()])
-        .status()?;
     Ok(())
 }
 
@@ -691,6 +875,167 @@ fn check_and_suggest_window_size(window_title: &str, recommended_width: i32, rec
 }
 
 use std::env;
+
+fn is_cursor_in_window(window_x: i32, window_y: i32, window_width: i32, window_height: i32) -> AppResult<bool> {
+    let output = Command::new("xdotool")
+        .args(&["getmouselocation", "--shell"])
+        .output()?;
+    
+    let output_str = String::from_utf8(output.stdout)?;
+    let mut cursor_x = 0;
+    let mut cursor_y = 0;
+    
+    for line in output_str.lines() {
+        if line.starts_with("X=") {
+            cursor_x = line[2..].parse().unwrap_or(0);
+        } else if line.starts_with("Y=") {
+            cursor_y = line[2..].parse().unwrap_or(0);
+        }
+    }
+
+    Ok(cursor_x >= window_x && 
+       cursor_x <= window_x + window_width && 
+       cursor_y >= window_y && 
+       cursor_y <= window_y + window_height)
+}
+
+fn process_barrels(
+    window_x: i32,
+    window_y: i32,
+    window_width: i32,
+    window_height: i32,
+    mut barrels: Vec<DetectionResult>,
+    detector: &mut ObjectDetector,
+    settings: &Settings,
+) -> AppResult<(Vec<DetectionResult>, (i32, i32))> {
+    let mut rng = rand::thread_rng();
+    
+    // Получаем текущую позицию курсора только один раз в начале
+    let original_pos = Command::new("xdotool")
+        .args(&["getmouselocation", "--shell"])
+        .output()?;
+    
+    let original_pos = String::from_utf8(original_pos.stdout)?;
+    let mut original_x = 0;
+    let mut original_y = 0;
+    
+    for line in original_pos.lines() {
+        if line.starts_with("X=") {
+            original_x = line[2..].parse().unwrap_or(0);
+        } else if line.starts_with("Y=") {
+            original_y = line[2..].parse().unwrap_or(0);
+        }
+    }
+
+    let mut merged = true;
+    while merged {
+        merged = false;
+        
+        let mut merges: Vec<(usize, usize, u32)> = Vec::new();
+        
+        for i in 0..barrels.len() {
+            for j in (i+1)..barrels.len() {
+                if barrels[i].object_name == barrels[j].object_name {
+                    let current_level: u32 = barrels[i].object_name.split_whitespace().last()
+                        .unwrap_or("0").parse().unwrap_or(0);
+                    let next_level = current_level + 1;
+                    
+                    if detector.templates.iter().any(|t| t.name == format!("Barrel {}", next_level)) {
+                        merges.push((i, j, next_level));
+                        break;
+                    }
+                }
+            }
+        }
+
+        if let Some((i, j, next_level)) = merges.first() {
+            let from = &barrels[*i];
+            let to = &barrels[*j];
+            
+            let from_template = detector.templates.iter()
+                .find(|t| t.name == from.object_name)
+                .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+            
+            let to_template = detector.templates.iter()
+                .find(|t| t.name == to.object_name)
+                .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+            
+            let from_size = (from_template.template.cols(), from_template.template.rows());
+            let to_size = (to_template.template.cols(), to_template.template.rows());
+            
+            // Вычисляем целевые позиции с учетом случайного смещения
+            let (from_offset_x, from_offset_y) = if settings.random_offset.enabled {
+                (
+                    rng.gen_range(-settings.random_offset.max_x_offset..=settings.random_offset.max_x_offset),
+                    rng.gen_range(-settings.random_offset.max_y_offset..=settings.random_offset.max_y_offset),
+                )
+            } else {
+                (0, 0)
+            };
+
+            let (to_offset_x, to_offset_y) = if settings.random_offset.enabled {
+                (
+                    rng.gen_range(-settings.random_offset.max_x_offset..=settings.random_offset.max_x_offset),
+                    rng.gen_range(-settings.random_offset.max_y_offset..=settings.random_offset.max_y_offset),
+                )
+            } else {
+                (0, 0)
+            };
+
+            let abs_from_x = window_x + from.location.x + from_size.0 / 2 + from_offset_x;
+            let abs_from_y = window_y + from.location.y + from_size.1 / 2 + from_offset_y;
+            
+            let abs_to_x = window_x + to.location.x + to_size.0 / 2 + to_offset_x;
+            let abs_to_y = window_y + to.location.y + to_size.1 / 2 + to_offset_y;
+
+            // Перемещаемся к начальной точке
+            human_like_move(abs_from_x, abs_from_y, &settings.human_like_movement)?;
+            
+            // Небольшая пауза перед кликом
+            thread::sleep(Duration::from_millis(rng.gen_range(2..5)));
+
+            // Нажимаем кнопку мыши
+            Command::new("xdotool")
+                .args(&["mousedown", "1"])
+                .status()?;
+            
+            // Небольшая пауза перед началом перемещения
+            thread::sleep(Duration::from_millis(rng.gen_range(5..12)));
+
+            // Перемещаемся к конечной точке
+            human_like_move(abs_to_x, abs_to_y, &settings.human_like_movement)?;
+
+            // Небольшая пауза перед отпусканием
+            thread::sleep(Duration::from_millis(rng.gen_range(6..12)));
+            
+            // Отпускаем кнопку мыши
+            Command::new("xdotool")
+                .args(&["mouseup", "1"])
+                .status()?;
+
+            // Сохраняем позицию для новой бочки
+            let new_location = to.location;
+            let conf = to.confidence.clone();
+
+            // Удаляем бочки (сначала бОльший индекс)
+            barrels.remove(*j);
+            barrels.remove(*i);
+            
+            // Добавляем новую бочку
+            barrels.push(DetectionResult {
+                object_name: format!("Barrel {}", next_level),
+                location: new_location,
+                confidence: conf
+            });
+            
+            merged = true;
+        }
+    }
+
+    Ok((barrels, (original_x, original_y)))
+}
+
+
 fn main() -> AppResult<()> {
     let args: Vec<String> = env::args().collect();
     let infinite_mode = args.iter().any(|arg| arg == "--infinite" || arg == "-i");
@@ -706,7 +1051,7 @@ fn main() -> AppResult<()> {
         settings.reference_height
     );
     
-    for template_settings in settings.templates {
+    for template_settings in &settings.templates {
         detector.add_template(
             &template_settings.name,
             &template_settings.path,
@@ -721,6 +1066,9 @@ fn main() -> AppResult<()> {
     loop {
         let screenshot_path = "screenshot.png";
         let (window_x, window_y) = capture_window_by_title(&settings.window_title, screenshot_path)?;
+        let (window_width, window_height) = get_window_size(&settings.window_title)?;
+
+        let is_on_window = is_cursor_in_window(window_x, window_y, window_width, window_height)?;
 
         let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR)
             .map_err(|e| AppError::ImageProcessing(format!("Failed to load screenshot: {}", e)))?;
@@ -736,11 +1084,12 @@ fn main() -> AppResult<()> {
         imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
         println!("Result saved to result.png");
 
-        // Группировка обнаруженных объектов по имени
-        for (name, objects) in group_detections_by_name(detections) {
-            if name == "Magnet" || name == "Buy" {
-                // Обработка магнитов - одиночный клик
-                for obj in objects {
+        let mut magnets: Vec<DetectionResult> = detections.clone().into_iter()
+            .filter(|d| d.object_name.starts_with("Magnet"))
+            .collect();
+
+        if magnets.len() > 0 {
+            for obj in magnets {
                     let template = detector.templates.iter()
                         .find(|t| t.name == obj.object_name)
                         .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
@@ -764,70 +1113,44 @@ fn main() -> AppResult<()> {
                         .status()?;
                     thread::sleep(Duration::from_millis(5));
                 }
-            } else {
-                // Оригинальная логика для других объектов (соединение пар)
-                let mut filtered_objects: Vec<_> = objects.into_iter()
-                    .filter(|obj| obj.object_name != "Empty")
-                    .collect();
-
-                if filtered_objects.len() >= 2 {
-                    filtered_objects.sort_by(|a, b| a.location.x.cmp(&b.location.x));
-                    
-                    let mut connected_objects = Vec::new();
-                    
-                    for i in 0..filtered_objects.len() - 1 {
-                        if connected_objects.contains(&i) {
-                            continue;
-                        }
-                        
-                        let from_template = detector.templates.iter()
-                            .find(|t| t.name == filtered_objects[i].object_name)
-                            .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-                        
-                        let to_template = detector.templates.iter()
-                            .find(|t| t.name == filtered_objects[i+1].object_name)
-                            .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-                        
-                        let from_size = (
-                            from_template.template.cols(),
-                            from_template.template.rows()
-                        );
-                        let to_size = (
-                            to_template.template.cols(),
-                            to_template.template.rows()
-                        );
-                        
-                        let from = filtered_objects[i].location;
-                        let to = filtered_objects[i + 1].location;
-
-                        click_and_drag_with_xdotool(
-                            window_x,
-                            window_y,
-                            (from.x, from.y), 
-                            from_size,
-                            (to.x, to.y),
-                            to_size,
-                            5,
-                            1
-                        )?;
-                        
-                        thread::sleep(Duration::from_millis(3));
-                        
-                        connected_objects.push(i);
-                        connected_objects.push(i + 1);
-                    }
-                }
-            }
         }
+        else {
 
+        // Обработка бочек
+        let mut barrels: Vec<DetectionResult> = detections.into_iter()
+            .filter(|d| d.object_name.starts_with("Barrel"))
+            .collect();
+
+        // Сортируем бочки по номеру (от меньшего к большему)
+        barrels.sort_by(|a, b| {
+            let num_a = a.object_name.split_whitespace().last().unwrap_or("0").parse().unwrap_or(0);
+            let num_b = b.object_name.split_whitespace().last().unwrap_or("0").parse().unwrap_or(0);
+            num_a.cmp(&num_b)
+        });
+
+        let (barrels, (original_x, original_y)) = process_barrels(
+            window_x,
+            window_y,
+            window_width,
+            window_height,
+            barrels,
+            &mut detector,
+            &settings,
+        )?;
+
+        if !is_on_window && settings.human_like_movement.enabled {
+            human_like_move(original_x, original_y, &settings.human_like_movement)?;
+        }
+        else if !&settings.human_like_movement.enabled {
+             human_like_move(original_x, original_y, &settings.human_like_movement)?;
+        }
         if !infinite_mode {
             break;
         }
+        }
 
-        // Пауза между итерациями, чтобы не нагружать систему
         thread::sleep(Duration::from_millis(settings.rescan_delay));
     }
 
     Ok(())
 }
-
