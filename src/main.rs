@@ -1084,6 +1084,38 @@ fn main() -> AppResult<()> {
         imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
         println!("Result saved to result.png");
 
+        let mut magnets: Vec<DetectionResult> = detections.clone().into_iter()
+            .filter(|d| d.object_name.starts_with("Magnet"))
+            .collect();
+
+        if magnets.len() > 0 {
+            for obj in magnets {
+                    let template = detector.templates.iter()
+                        .find(|t| t.name == obj.object_name)
+                        .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                    
+                    let size = (
+                        template.template.cols(),
+                        template.template.rows()
+                    );
+                    
+                    let abs_x = window_x + obj.location.x + size.0 / 2;
+                    let abs_y = window_y + obj.location.y + size.1 / 2;
+
+                    // Одиночный клик
+                    Command::new("xdotool")
+                        .args(&["mousemove", &abs_x.to_string(), &abs_y.to_string()])
+                        .status()?;
+                    thread::sleep(Duration::from_millis(5));
+
+                    Command::new("xdotool")
+                        .args(&["click", "1"])
+                        .status()?;
+                    thread::sleep(Duration::from_millis(5));
+                }
+        }
+        else {
+
         // Обработка бочек
         let mut barrels: Vec<DetectionResult> = detections.into_iter()
             .filter(|d| d.object_name.starts_with("Barrel"))
@@ -1114,6 +1146,7 @@ fn main() -> AppResult<()> {
         }
         if !infinite_mode {
             break;
+        }
         }
 
         thread::sleep(Duration::from_millis(settings.rescan_delay));
