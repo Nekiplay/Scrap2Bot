@@ -348,34 +348,24 @@ fn display_results_as_table(
     println!("╝ {}ms", detection_time);
 
     // Statistics section
-    let min_w = 6; // Ширина колонки для минимального уровня
-    let max_w = 6; // Ширина колонки для максимального уровня
-    let target_w = 6; // Ширина колонки для целевого уровня
-    let merges_w = 6; // Ширина колонки для счетчика объединений
+let min_w = 5; // Ширина для min_lvl
+let max_w = 5; // Ширина для max_lvl
+let target_w = 5; // Ширина для target
+let merges_w = 6; // Ширина для merges
 
-    println!(
-        "╔{}╦{}╦{}╦{}╗",
-        "═".repeat(min_w + 2), // +2 для учета пробелов
-        "═".repeat(max_w + 2),
-        "═".repeat(target_w + 2),
-        "═".repeat(merges_w + 2)
-    );
+let total_width = min_w + max_w + target_w + merges_w + 9; // 9 пробелов между колонками
 
-    println!(
-        "║ {:<min_w$} ║ {:<max_w$} ║ {:<target_w$} ║ {:>merges_w$} ║",
-        format!("⭣{}", min_lvl),
-        format!("⭡{}", max_lvl),
-        format!("⭢{}", max_lvl + 1),
-        merges_remaining
-    );
+println!("╔{}╗", "═".repeat(total_width));
 
-    println!(
-        "╚{}╩{}╩{}╩{}╝",
-        "═".repeat(min_w + 2),
-        "═".repeat(max_w + 2),
-        "═".repeat(target_w + 2),
-        "═".repeat(merges_w + 2)
-    );
+println!(
+    "║ {:<min_w$}  {:<max_w$}  {:<target_w$}  ⭤{:>merges_w$} ║",
+    format!("⭣{}", min_lvl),
+    format!("⭡{}", max_lvl),
+    format!("⭢{}", max_lvl + 1),
+    merges_remaining
+);
+
+println!("╚{}╝", "═".repeat(total_width));
 }
 
 fn check_and_suggest_window_size(
