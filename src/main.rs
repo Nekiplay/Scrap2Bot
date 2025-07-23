@@ -1,6 +1,4 @@
-use crossterm::cursor::MoveTo;
-use crossterm::terminal::SetTitle;
-use crossterm::{execute, terminal::*};
+use crossterm::{execute, terminal::SetTitle};
 use opencv::{
     Result as OpenCVResult,
     core::{self, AlgorithmHint, Mat, Point, Rect, Scalar, Size, in_range},
@@ -75,7 +73,6 @@ enum AppError {
     IO(std::io::Error),
     Utf8(std::string::FromUtf8Error),
     WindowNotFound(String),
-    CaptureFailed(String),
     ScrotFailed(String),
     ImageProcessing(String),
     SettingsError(String),
@@ -90,7 +87,6 @@ impl fmt::Display for AppError {
             AppError::IO(e) => write!(f, "IO error: {}", e),
             AppError::Utf8(e) => write!(f, "UTF-8 conversion error: {}", e),
             AppError::WindowNotFound(title) => write!(f, "Window not found: {}", title),
-            AppError::CaptureFailed(msg) => write!(f, "Capture failed: {}", msg),
             AppError::ScrotFailed(msg) => write!(f, "Scrot failed: {}", msg),
             AppError::ImageProcessing(msg) => write!(f, "Image processing error: {}", msg),
             AppError::SettingsError(msg) => write!(f, "Settings error: {}", msg),
@@ -167,7 +163,6 @@ impl ObjectTemplate {
         let mut template = imgcodecs::imread(template_path, IMREAD_COLOR)?;
 
         // Удаляем цвет (154, 195, 161) из шаблона
-        let color_to_remove = Scalar::new(161.0, 195.0, 154.0, 0.0);
         let mut mask = Mat::default();
         in_range(
             &template,
@@ -213,7 +208,6 @@ struct DetectionResult {
 struct ObjectDetector {
     templates: Vec<Arc<ObjectTemplate>>,
     base_scale_factor: f64,
-    reference_size: Size,
     active_range: (usize, usize), // (start, end) индексы активных шаблонов
     empty_template_index: usize,  // Индекс шаблона Empty
     cloud_template_index: usize,  // Индекс шаблона Cloud
@@ -221,11 +215,10 @@ struct ObjectDetector {
 }
 
 impl ObjectDetector {
-    fn new(base_scale_factor: f64, reference_width: i32, reference_height: i32) -> Self {
+    fn new(base_scale_factor: f64) -> Self {
         Self {
             templates: Vec::new(),
             base_scale_factor,
-            reference_size: Size::new(reference_width, reference_height),
             active_range: (0, 0), // Будет установлено при добавлении шаблонов
             empty_template_index: 0,
             cloud_template_index: 0,
@@ -863,7 +856,6 @@ fn generate_human_like_path(
     // Создаем контрольные точки для кривой Безье
     let dx = end.0 - start.0;
     let dy = end.1 - start.1;
-    let distance = ((dx * dx + dy * dy) as f64).sqrt();
 
     // Количество промежуточных точек
     let num_points = settings.curve_smoothness.max(2);
@@ -1127,7 +1119,6 @@ fn calculate_required_merges(barrels: &[DetectionResult]) -> (u32, u32, u32) {
 
     let min_level = *level_counts.keys().min().unwrap_or(&0);
     let max_level = *level_counts.keys().max().unwrap_or(&0);
-    let target_level = max_level + 1;
 
     // Вычисляем сколько соединений нужно с учетом уже имеющихся бочек
     let mut merges_needed = 0;
@@ -1160,8 +1151,6 @@ fn calculate_required_merges(barrels: &[DetectionResult]) -> (u32, u32, u32) {
 fn process_barrels(
     window_x: i32,
     window_y: i32,
-    window_width: i32,
-    window_height: i32,
     mut barrels: Vec<DetectionResult>,
     detector: &mut ObjectDetector,
     settings: &Settings,
@@ -1350,8 +1339,6 @@ fn main() -> AppResult<()> {
 
     let mut detector = ObjectDetector::new(
         settings.resolution,
-        settings.reference_width,
-        settings.reference_height,
     );
 
     for (i, template_settings) in settings.templates.iter().enumerate() {
@@ -1403,7 +1390,7 @@ fn main() -> AppResult<()> {
         imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
 
         // Обработка облака мангинитов
-        let mut cloud: Vec<DetectionResult> = detections
+        let cloud: Vec<DetectionResult> = detections
             .clone()
             .into_iter()
             .filter(|d| d.object_name.starts_with("Cloud"))
@@ -1423,37 +1410,45 @@ fn main() -> AppResult<()> {
                 max_deviation: settings.human_like_movement.max_deviation,
                 speed_variation: settings.human_like_movement.speed_variation / 5.0,
                 curve_smoothness: 8, // Меньше точек = более прямое движение
-                min_pause_ms: 1,      // Минимальные паузы
+                min_pause_ms: 1,     // Минимальные паузы
                 max_pause_ms: 2,
-                base_speed: settings.human_like_movement.base_speed * 15.0, // В 5 раз быстрее
-                min_down_ms: 1,
-                max_down_ms: 2,
-                min_up_ms: 1,
-                max_up_ms: 2,
+                base_speed: settings.human_like_movement.base_speed * 15.0, // В 15 раз быстрее
+                min_down_ms: 3,
+                max_down_ms: 5,
+                min_up_ms: 3,
+                max_up_ms: 5,
                 min_move_delay_ms: 1,
-                max_move_delay_ms: 2,
+                max_move_delay_ms: 1,
             };
 
-            // Плавное перемещение слева направо
-            human_like_move(start_x, y_pos, &fast_movement_settings)?;
-            // Нажимаем кнопку мыши
+            // Плавное перемещение по зигзагообразному маршруту
+            let points = [
+                (start_x, y_pos),
+                (end_x, y_pos),
+                (start_x, y_pos),
+                (start_x, y_pos + 150),
+                (end_x, y_pos + 150),
+                (end_x, y_pos + 250),
+                (start_x, y_pos + 250),
+                (start_x, y_pos + 350),
+                (end_x, y_pos + 350),
+            ];
+
+            // 1. Перемещаемся к начальной точке без нажатия
+            human_like_move(points[0].0, points[0].1, &fast_movement_settings)?;
+
+            // 2. Нажимаем кнопку мыши
             Command::new("xdotool").args(&["mousedown", "1"]).status()?;
 
-            human_like_move(end_x, y_pos, &fast_movement_settings)?;
+            // 3. Движение вперед по остальным точкам
+            for &(x, y) in &points[1..] {
+                human_like_move(x, y, &fast_movement_settings)?;
+            }
 
-            human_like_move(start_x, y_pos, &fast_movement_settings)?;
-
-            human_like_move(start_x, y_pos + 150, &fast_movement_settings)?;
-
-            human_like_move(end_x, y_pos + 150, &fast_movement_settings)?;
-
-            human_like_move(end_x, y_pos + 250, &fast_movement_settings)?;
-
-            human_like_move(start_x, y_pos + 250, &fast_movement_settings)?;
-
-            human_like_move(start_x, y_pos + 350, &fast_movement_settings)?;
-
-            human_like_move(end_x, y_pos + 350, &fast_movement_settings)?;
+            // Движение назад (исключая последнюю точку)
+            for &(x, y) in points[..points.len() - 1].iter().rev() {
+                human_like_move(x, y, &fast_movement_settings)?;
+            }
 
             // Отпускаем кнопку мыши
             Command::new("xdotool").args(&["mouseup", "1"]).status()?;
@@ -1501,8 +1496,6 @@ fn main() -> AppResult<()> {
             let (barrels, (original_x, original_y)) = process_barrels(
                 window_x,
                 window_y,
-                window_width,
-                window_height,
                 barrels,
                 &mut detector,
                 &settings,
