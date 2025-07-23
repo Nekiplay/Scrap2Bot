@@ -693,11 +693,11 @@ fn main() -> AppResult<()> {
 
         if cloud.len() > 0 {
             let fast_movement_settings = HumanLikeMovementSettings {
-                enabled: true,
+                enabled: true, // Включено для горизонтальных движений
                 max_deviation: 0.000001,
                 speed_variation: 0.000001,
-                curve_smoothness: 11, // Меньше точек = более прямое движение
-                min_pause_ms: 0,      // Минимальные паузы
+                curve_smoothness: 15,
+                min_pause_ms: 0,
                 max_pause_ms: 1,
                 base_speed: 0.000001,
                 min_down_ms: 0,
@@ -715,49 +715,41 @@ fn main() -> AppResult<()> {
             let step_height = (window_height - 260) / 9;
 
             // Создаем зигзагообразный маршрут от верха до низа окна
-            let mut points = Vec::new();
             let mut current_y = window_y + 50 + step_height;
+            let left_x = window_x + (4 + settings.random_offset.max_x_offset);
+            let right_x = window_x + window_width - (4 + settings.random_offset.max_x_offset);
 
-            // Начинаем с левого верхнего угла
-            let mut current_x = window_x + (4 + settings.random_offset.max_x_offset);
-            points.push((current_x, current_y));
-
-            while current_y < window_y + window_height - step_height {
-                // Движение вправо
-                current_x = window_x + window_width - (4 + settings.random_offset.max_x_offset);
-                points.push((current_x, current_y));
-
-                // Движение вниз
-                current_y += step_height;
-                points.push((current_x, current_y));
-
-                // Движение влево
-                current_x = window_x + (4 + settings.random_offset.max_x_offset);
-                points.push((current_x, current_y));
-
-                // Движение вниз (если не вышли за границы)
-                if current_y < window_y + window_height - step_height {
-                    current_y += step_height;
-                    points.push((current_x, current_y));
-                }
-            }
-
-            // 1. Перемещаемся к начальной точке без нажатия
-            human_like_move(points[0].0, points[0].1, &fast_movement_settings)?;
+            // 1. Перемещаемся к начальной точке (левый верхний угол) с human-like движением
+            human_like_move(left_x, current_y, &fast_movement_settings)?;
             thread::sleep(Duration::from_millis(1));
+
             // 2. Нажимаем кнопку мыши
             Command::new("xdotool").args(&["mousedown", "1"]).status()?;
 
-            // 3. Движение по всем точкам с плавными переходами
-            for &(x, y) in points.iter().skip(1) {
-                human_like_move(x, y, &fast_movement_settings)?;
+            while current_y < window_y + window_height - step_height {
+                // Движение вправо - с human-like движением
+                human_like_move(right_x, current_y, &fast_movement_settings)?;
                 thread::sleep(Duration::from_millis(1));
-            }
 
-            // 4. Дополнительное движение назад для лучшего покрытия (опционально)
-            for &(x, y) in points.iter().rev().skip(1) {
-                human_like_move(x, y, &fast_movement_settings)?;
+                // Движение вниз - прямое перемещение без human-like
+                current_y += step_height;
+                Command::new("xdotool")
+                    .args(&["mousemove", &right_x.to_string(), &current_y.to_string()])
+                    .status()?;
                 thread::sleep(Duration::from_millis(1));
+
+                // Движение влево - с human-like движением
+                human_like_move(left_x, current_y, &fast_movement_settings)?;
+                thread::sleep(Duration::from_millis(1));
+
+                // Движение вниз (если не вышли за границы) - прямое перемещение без human-like
+                if current_y < window_y + window_height - step_height {
+                    current_y += step_height;
+                    Command::new("xdotool")
+                        .args(&["mousemove", &left_x.to_string(), &current_y.to_string()])
+                        .status()?;
+                    thread::sleep(Duration::from_millis(1));
+                }
             }
 
             // Отпускаем кнопку мыши
