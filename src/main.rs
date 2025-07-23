@@ -731,24 +731,38 @@ fn main() -> AppResult<()> {
 
                 // Капли дождя
                 for &pos in drop_positions {
+                    // Ограничиваем позицию внутри границ (минус 2 символа для границ)
+                    let pos = pos.min(line_length - 4);
                     println!(
-                        "|{}{}|",
-                        " ".repeat(pos as usize),
-                        "\x1B[34m|\x1B[0m" // Синяя капля
+                        "| {}{}{} |",
+                        " ".repeat(pos),
+                        "\x1B[34m|\x1B[0m", // Синяя капля
+                        " ".repeat(line_length - 4 - pos - 1)
                     );
                 }
 
                 // Нижняя граница
                 println!("{}", "-".repeat(line_length));
 
-                // Статус
+                // Статус с правильным выравниванием
                 let status = if is_moving_right {
                     "\x1B[36mCollecting magnets >>\x1B[0m"
                 } else {
                     "\x1B[36mCollecting magnets <<\x1B[0m"
                 };
-                println!("|{:^width$}|", status, width = line_length - 2);
-                println!("{}", "-".repeat(line_length));
+
+                // Удаляем escape-последовательности для расчета ширины
+                let clean_status = status.replace("\x1B[36m", "").replace("\x1B[0m", "");
+                let padding = line_length.saturating_sub(clean_status.len() + 2) / 2;
+
+                println!(
+                    "|{}{}{}|",
+                    " ".repeat(padding),
+                    status,
+                    " ".repeat(line_length - clean_status.len() - 2 - padding)
+                );
+
+                println!("{}", "-".repeat(line_length))
             };
 
             // Вычисляем шаг для зигзага (примерно 1/8 высоты окна)
