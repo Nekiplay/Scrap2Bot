@@ -1096,6 +1096,15 @@
             "red": 144,
             "green": 142,
             "blue": 134
+        },
+        {
+            "name": "Barrel 119",
+            "path": "templates/barrels/119.png",
+            "threshold": 0.80,
+            "min_distance": 15.0,
+            "red": 204,
+            "green": 142,
+            "blue": 67
         }
     ]
 }

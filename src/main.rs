@@ -362,7 +362,7 @@ impl ObjectDetector {
         &mut self,
         image: &Mat,
         convert_to_grayscale: bool,
-    ) -> OpenCVResult<Vec<DetectionResult>> {
+    ) -> OpenCVResult<(Vec<DetectionResult>, u128)> {
         let start_time = Instant::now();
 
         // Подготовка изображения
@@ -521,7 +521,7 @@ impl ObjectDetector {
         let elapsed = start_time.elapsed();
         let elapsed_ms = elapsed.as_millis();
         // Очищаем терминал и выводим информацию
-        print!("\x1B[2J\x1B[3J\x1B[HDetection: {}ms\n", elapsed_ms);
+        print!("\x1B[2J\x1B[3J\x1B[H");
         io::stdout().flush().map_err(|e| {
             opencv::Error::new(
                 opencv::core::StsError,
@@ -542,7 +542,7 @@ impl ObjectDetector {
 
         self.update_active_range(&detected_numbers);
 
-        Ok(self.filter_close_detections(all_results.into_iter().flatten().collect()))
+        Ok((self.filter_close_detections(all_results.into_iter().flatten().collect()), elapsed_ms))
     }
 
     fn filter_close_detections(&self, mut results: Vec<DetectionResult>) -> Vec<DetectionResult> {
@@ -924,6 +924,7 @@ fn display_results_as_table(
     cols: usize,
     rows: usize,
     templates: &[Arc<ObjectTemplate>],
+    detection_time: usize,
 ) {
     if detections.is_empty() {
         print!("No objects detected\n");
@@ -965,7 +966,7 @@ fn display_results_as_table(
     let line_length = cols * (cell_width + 2) + 1;
 
     // Выводим таблицу с цветами
-    print!("{}\n", "-".repeat(line_length));
+    print!("{} {}ms\n", "-".repeat(line_length), detection_time);
 
      for row in table {
         print!("|");
@@ -1357,14 +1358,14 @@ fn main() -> AppResult<()> {
                     ));
                 }
 
-                let detections =
+                let (detections, detection_time) =
                     detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
 
                 let (window_width, window_height) = get_window_size(&settings.window_title)?;
 
                 let is_on_window =
                     is_cursor_in_window(window_x, window_y, window_width, window_height)?;
-                display_results_as_table(&detections, 4, 5, &detector.templates);
+                display_results_as_table(&detections, 4, 5, &detector.templates, detection_time.try_into().unwrap_or(0));
 
                 detector.draw_detections(&mut image, &detections)?;
                 imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
