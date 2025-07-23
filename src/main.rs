@@ -348,23 +348,20 @@ fn display_results_as_table(
     println!("╝ {}ms", detection_time);
 
     // Statistics section
-let min_w = 5; // Ширина для min_lvl
-let max_w = 5; // Ширина для max_lvl
-let target_w = 5; // Ширина для target
-let merges_w = 6; // Ширина для merges
-
-let total_width = min_w + max_w + target_w + merges_w + 9; // 9 пробелов между колонками
+let min_w = 5;      // Ширина для min_lvl
+let max_w = 5;      // Ширина для max_lvl
+let target_w = 5;   // Ширина для target
+let merges_w = 10;   // Увеличил ширину для merges_remaining (было 7)
+let total_width = min_w + max_w + target_w + merges_w + 5; // 3 пробела между колонками
 
 println!("╔{}╗", "═".repeat(total_width));
-
 println!(
-    "║ {:<min_w$}  {:<max_w$}  {:<target_w$}  ⭤{:>merges_w$} ║",
+    "║ {:^min_w$} {:^max_w$} {:^target_w$} {:>merges_w$} ║",
     format!("⭣{}", min_lvl),
     format!("⭡{}", max_lvl),
     format!("⭢{}", max_lvl + 1),
-    merges_remaining
+    format!("⭤{}", merges_remaining)
 );
-
 println!("╚{}╝", "═".repeat(total_width));
 }
 
