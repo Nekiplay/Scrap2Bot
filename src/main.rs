@@ -1,3 +1,5 @@
+use crossterm::cursor::MoveTo;
+use crossterm::{execute, terminal::*};
 use opencv::{
     Result as OpenCVResult,
     core::{self, AlgorithmHint, Mat, Point, Rect, Scalar, Size, in_range},
@@ -12,12 +14,10 @@ use rand::Rng;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
-use std::{error::Error, fmt, fs, process::Command, thread, time::Duration};
-use std::{sync::Arc, time::Instant};
 use std::io;
 use std::io::Write;
-use crossterm::{execute, terminal::*};
-use crossterm::cursor::MoveTo;
+use std::{error::Error, fmt, fs, process::Command, thread, time::Duration};
+use std::{sync::Arc, time::Instant};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Settings {
@@ -213,6 +213,9 @@ struct ObjectDetector {
     templates: Vec<Arc<ObjectTemplate>>,
     base_scale_factor: f64,
     reference_size: Size,
+    active_range: (usize, usize), // (start, end) индексы активных шаблонов
+    empty_template_index: usize,  // Индекс шаблона Empty
+    full_range: bool,
 }
 
 impl ObjectDetector {
@@ -221,14 +224,107 @@ impl ObjectDetector {
             templates: Vec::new(),
             base_scale_factor,
             reference_size: Size::new(reference_width, reference_height),
+            active_range: (0, 0), // Будет установлено при добавлении шаблонов
+            empty_template_index: 0,
+            full_range: true, // Флаг полного диапазона
         }
     }
 
-    fn calculate_current_scale(&self, current_size: Size) -> f64 {
-        let width_scale = current_size.width as f64 / self.reference_size.width as f64;
-        let height_scale = current_size.height as f64 / self.reference_size.height as f64;
-        (width_scale + height_scale) / 2.0
+    fn update_active_range(&mut self, detected_numbers: &[u32]) {
+    if detected_numbers.is_empty() {
+        // If nothing is detected, use full range but ensure it's within bounds
+        self.active_range = (0, self.templates.len().saturating_sub(1));
+        self.full_range = true;
+        return;
     }
+
+    // If was full range and something found - switch to targeted range
+    if self.full_range {
+        let min_detected = *detected_numbers.iter().min().unwrap();
+        let max_detected = *detected_numbers.iter().max().unwrap();
+
+        // Define new range with buffer
+        let new_min = min_detected.saturating_sub(2); // +5 previous levels
+        let new_max = max_detected + 2; // +5 next levels
+
+        // Find template indices for new range
+        let mut start = 0;
+        let mut end = self.templates.len().saturating_sub(1);
+
+        for (i, template) in self.templates.iter().enumerate() {
+            if let Some(num) = template
+                .name
+                .split_whitespace()
+                .last()
+                .and_then(|s| s.parse::<u32>().ok())
+            {
+                if num >= new_min && num <= new_max {
+                    if i < start || start == 0 {
+                        start = i;
+                    }
+                    if i > end || end == self.templates.len().saturating_sub(1) {
+                        end = i;
+                    }
+                }
+            }
+        }
+
+        // Ensure the range is valid
+        self.active_range = (
+            start.min(self.templates.len().saturating_sub(1)),
+            end.min(self.templates.len().saturating_sub(1)),
+        );
+        self.full_range = false;
+    } else {
+        // If already in targeted range - adjust it smoothly
+        let min_detected = *detected_numbers.iter().min().unwrap();
+        let max_detected = *detected_numbers.iter().max().unwrap();
+
+        // Current bounds
+        let (current_start, current_end) = self.active_range;
+
+        // New bounds with buffer
+        let new_min = min_detected.saturating_sub(3) as usize;
+        let new_max = (max_detected + 3) as usize;
+
+        // Smooth range expansion
+        let new_start = if new_min < current_start {
+            new_min
+        } else {
+            current_start
+        };
+        let new_end = if new_max > current_end {
+            new_max
+        } else {
+            current_end
+        };
+
+        // Ensure the range is valid
+        self.active_range = (
+            new_start.min(self.templates.len().saturating_sub(1)),
+            new_end.min(self.templates.len().saturating_sub(1)),
+        );
+    }
+}
+
+    fn get_active_templates(&self) -> Vec<Arc<ObjectTemplate>> {
+    let mut result = Vec::new();
+    
+    // Всегда включаем шаблон Empty
+    if self.empty_template_index < self.templates.len() {
+        result.push(self.templates[self.empty_template_index].clone());
+    }
+    
+    // Добавляем шаблоны из активного диапазона (исключая Empty, если он уже добавлен)
+    let (start, end) = self.active_range;
+    for i in start..=end {
+        if i < self.templates.len() && i != self.empty_template_index {
+            result.push(self.templates[i].clone());
+        }
+    }
+    
+    result
+}
 
     fn add_template(
         &mut self,
@@ -252,6 +348,10 @@ impl ObjectDetector {
             resolution,
         )?;
         self.templates.push(Arc::new(template));
+
+        self.active_range = (0, self.templates.len() - 1);
+        self.full_range = true;
+
         Ok(())
     }
 
@@ -289,8 +389,8 @@ impl ObjectDetector {
         )?;
 
         // Параллельное сопоставление шаблонов
-        let all_results: Vec<Vec<DetectionResult>> = self
-            .templates
+        let active_templates = self.get_active_templates();
+        let all_results: Vec<Vec<DetectionResult>> = active_templates
             .par_iter()
             .map(|template| {
                 let template_image = if convert_to_grayscale {
@@ -418,13 +518,26 @@ impl ObjectDetector {
         let elapsed = start_time.elapsed();
         let elapsed_ms = elapsed.as_millis();
         // Очищаем терминал и выводим информацию
-    print!("\x1B[2J\x1B[3J\x1B[HОбнаружено за: {} мс\n", elapsed_ms);
-    io::stdout().flush().map_err(|e| {
-        opencv::Error::new(
-            opencv::core::StsError,
-            format!("Failed to flush stdout: {}", e),
-        )
-    })?;
+        print!("\x1B[2J\x1B[3J\x1B[HОбнаружено за: {} мс\n", elapsed_ms);
+        io::stdout().flush().map_err(|e| {
+            opencv::Error::new(
+                opencv::core::StsError,
+                format!("Failed to flush stdout: {}", e),
+            )
+        })?;
+
+        let detected_numbers: Vec<u32> = all_results
+            .iter()
+            .flatten()
+            .filter_map(|d| {
+                d.object_name
+                    .split_whitespace()
+                    .last()
+                    .and_then(|s| s.parse().ok())
+            })
+            .collect();
+
+        self.update_active_range(&detected_numbers);
 
         Ok(self.filter_close_detections(all_results.into_iter().flatten().collect()))
     }
@@ -879,7 +992,10 @@ fn check_and_suggest_window_size(
     let height_diff = (current_height - recommended_height).abs();
 
     if width_diff > TOLERANCE || height_diff > TOLERANCE {
-        print!("Current window size: {}x{}\n", current_width, current_height);
+        print!(
+            "Current window size: {}x{}\n",
+            current_width, current_height
+        );
         print!(
             "Recommended window size: {}x{} (with ±{}px tolerance)\n",
             recommended_width, recommended_height, TOLERANCE
@@ -1151,7 +1267,7 @@ fn main() -> AppResult<()> {
         settings.reference_height,
     );
 
-    for template_settings in &settings.templates {
+    for (i, template_settings) in settings.templates.iter().enumerate() {
         detector.add_template(
             &template_settings.name,
             &template_settings.path,
@@ -1162,10 +1278,19 @@ fn main() -> AppResult<()> {
             template_settings.blue,
             template_settings.resolution,
         )?;
+
+        if template_settings.name == "Empty" {
+            detector.empty_template_index = i;
+        }
     }
 
-    loop {
+    // Инициализируем начальный диапазон
+    detector.active_range = (
+        detector.empty_template_index,
+        detector.empty_template_index + 5,
+    ); // Начинаем с Empty + первые 5 бочек
 
+    loop {
         let screenshot_path = "screenshot.png";
         let (window_x, window_y) =
             capture_window_by_title(&settings.window_title, screenshot_path)?;
