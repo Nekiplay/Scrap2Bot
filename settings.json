@@ -16,7 +16,7 @@
     "curve_smoothness": 12,
     "min_pause_ms": 2,
     "max_pause_ms": 5,
-    "base_speed": 0.145,
+    "base_speed": 0.01,
     "min_down_ms": 9,
     "max_down_ms": 21,
     "min_up_ms": 14,
@@ -1159,6 +1159,24 @@
             "red": 54,
             "green": 106,
             "blue": 34
+        },
+        {
+            "name": "Barrel 125",
+            "path": "templates/barrels/125.png",
+            "threshold": 0.80,
+            "min_distance": 15.0,
+            "red": 45,
+            "green": 143,
+            "blue": 196
+        },
+        {
+            "name": "Barrel 126",
+            "path": "templates/barrels/126.png",
+            "threshold": 0.80,
+            "min_distance": 15.0,
+            "red": 68,
+            "green": 169,
+            "blue": 19
         }
     ]
 }

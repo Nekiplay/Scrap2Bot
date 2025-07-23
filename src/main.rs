@@ -1,696 +1,25 @@
+use Scrap2Bot::capture::AppError;
+use Scrap2Bot::capture::AppResult;
+use Scrap2Bot::capture::capture_window_by_title;
+use Scrap2Bot::capture::get_window_size;
+use Scrap2Bot::objectdetector::DetectionResult;
+use Scrap2Bot::objectdetector::ObjectDetector;
+use Scrap2Bot::objectdetector::ObjectTemplate;
+use Scrap2Bot::settings::HumanLikeMovementSettings;
+use Scrap2Bot::settings::RandomOffsetSettings;
+use Scrap2Bot::settings::Settings;
 use crossterm::{execute, terminal::SetTitle};
-use opencv::{
-    Result as OpenCVResult,
-    core::{self, AlgorithmHint, Mat, Point, Rect, Scalar, Size, in_range},
-    imgcodecs::{self, IMREAD_COLOR},
-    imgproc::{
-        self, COLOR_BGR2GRAY, FILLED, INTER_AREA, LineTypes, THRESH_BINARY, TM_CCOEFF_NORMED,
-        cvt_color, resize, threshold,
-    },
-    prelude::*,
-};
+use opencv::core::Vector;
+use opencv::imgcodecs;
+use opencv::imgcodecs::IMREAD_COLOR;
+use opencv::prelude::MatTraitConst;
 use rand::Rng;
-use rayon::prelude::*;
-use serde::{Deserialize, Serialize};
 use std::f64::consts::PI;
-use std::io;
-use std::io::Write;
-use std::{error::Error, fmt, fs, process::Command, thread, time::Duration};
-use std::{sync::Arc, time::Instant};
-
-#[derive(Debug, Deserialize, Serialize)]
-struct Settings {
-    window_title: String,
-    resolution: f64,
-    rescan_delay: u64,
-    reference_width: i32,
-    reference_height: i32,
-    convert_to_grayscale: bool,
-    templates: Vec<TemplateSettings>,
-    random_offset: RandomOffsetSettings,
-    human_like_movement: HumanLikeMovementSettings,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct RandomOffsetSettings {
-    enabled: bool,
-    max_x_offset: i32,
-    max_y_offset: i32,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct HumanLikeMovementSettings {
-    enabled: bool,
-    max_deviation: f64,   // Максимальное отклонение от прямой линии (в пикселях)
-    speed_variation: f64, // Вариация скорости (0.0 - 1.0)
-    curve_smoothness: usize, // Количество промежуточных точек для кривой
-    min_pause_ms: u64,    // Минимальная пауза между движениями
-    max_pause_ms: u64,    // Максимальная пауза между движениями
-    base_speed: f64,
-    min_down_ms: u64,
-    max_down_ms: u64,
-    min_up_ms: u64,
-    max_up_ms: u64,
-    min_move_delay_ms: u64,
-    max_move_delay_ms: u64,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-struct TemplateSettings {
-    name: String,
-    path: String,
-    threshold: f64,
-    min_distance: f32,
-    red: f32,
-    green: f32,
-    blue: f32,
-    resolution: Option<f64>,
-}
-
-#[derive(Debug)]
-enum AppError {
-    OpenCV(opencv::Error),
-    IO(std::io::Error),
-    Utf8(std::string::FromUtf8Error),
-    WindowNotFound(String),
-    ScrotFailed(String),
-    ImageProcessing(String),
-    SettingsError(String),
-    X11Connect(x11rb::errors::ConnectError),
-    X11Error(Box<dyn std::error::Error>),
-}
-
-impl fmt::Display for AppError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            AppError::OpenCV(e) => write!(f, "OpenCV error: {}", e),
-            AppError::IO(e) => write!(f, "IO error: {}", e),
-            AppError::Utf8(e) => write!(f, "UTF-8 conversion error: {}", e),
-            AppError::WindowNotFound(title) => write!(f, "Window not found: {}", title),
-            AppError::ScrotFailed(msg) => write!(f, "Scrot failed: {}", msg),
-            AppError::ImageProcessing(msg) => write!(f, "Image processing error: {}", msg),
-            AppError::SettingsError(msg) => write!(f, "Settings error: {}", msg),
-            AppError::X11Connect(msg) => write!(f, "X11 connect error: {}", msg),
-            AppError::X11Error(msg) => write!(f, "X11 error: {}", msg),
-        }
-    }
-}
-
-impl Error for AppError {}
-
-impl From<opencv::Error> for AppError {
-    fn from(e: opencv::Error) -> Self {
-        AppError::OpenCV(e)
-    }
-}
-
-impl From<std::io::Error> for AppError {
-    fn from(e: std::io::Error) -> Self {
-        AppError::IO(e)
-    }
-}
-
-impl From<std::string::FromUtf8Error> for AppError {
-    fn from(e: std::string::FromUtf8Error) -> Self {
-        AppError::Utf8(e)
-    }
-}
-
-impl From<serde_json::Error> for AppError {
-    fn from(e: serde_json::Error) -> Self {
-        AppError::SettingsError(e.to_string())
-    }
-}
-
-impl From<x11rb::errors::ConnectError> for AppError {
-    fn from(e: x11rb::errors::ConnectError) -> Self {
-        AppError::X11Connect(e)
-    }
-}
-
-impl From<Box<dyn std::error::Error>> for AppError {
-    fn from(e: Box<dyn std::error::Error>) -> Self {
-        AppError::X11Error(e)
-    }
-}
-
-type AppResult<T> = std::result::Result<T, AppError>;
-
-#[derive(Clone)]
-struct ObjectTemplate {
-    name: String,
-    template: Mat,
-    gray_template: Mat,
-    threshold: f64,
-    min_distance: f32,
-    red: f32,
-    green: f32,
-    blue: f32,
-    resolution: Option<f64>,
-}
-
-impl ObjectTemplate {
-    fn new(
-        name: &str,
-        template_path: &str,
-        threshold: f64,
-        min_distance: f32,
-        red: f32,
-        green: f32,
-        blue: f32,
-        resolution: Option<f64>,
-    ) -> OpenCVResult<Self> {
-        let mut template = imgcodecs::imread(template_path, IMREAD_COLOR)?;
-
-        // Удаляем цвет (154, 195, 161) из шаблона
-        let mut mask = Mat::default();
-        in_range(
-            &template,
-            &Scalar::new(150.0, 190.0, 150.0, 0.0), // Нижняя граница с небольшим запасом
-            &Scalar::new(158.0, 200.0, 158.0, 0.0), // Верхняя граница с небольшим запасом
-            &mut mask,
-        )?;
-
-        // Заменяем цвет на прозрачный (черный)
-        let black = Scalar::all(0.0);
-        template.set_to(&black, &mask)?;
-
-        let mut gray_template = Mat::default();
-        cvt_color(
-            &template,
-            &mut gray_template,
-            COLOR_BGR2GRAY,
-            0,
-            AlgorithmHint::ALGO_HINT_DEFAULT,
-        )?;
-
-        Ok(Self {
-            name: name.to_string(),
-            template,
-            gray_template,
-            threshold,
-            min_distance,
-            red,
-            green,
-            blue,
-            resolution,
-        })
-    }
-}
-
-#[derive(Debug, Clone)]
-struct DetectionResult {
-    object_name: String,
-    location: Point,
-    confidence: f64,
-}
-
-struct ObjectDetector {
-    templates: Vec<Arc<ObjectTemplate>>,
-    base_scale_factor: f64,
-    active_range: (usize, usize), // (start, end) индексы активных шаблонов
-    empty_template_index: usize,  // Индекс шаблона Empty
-    cloud_template_index: usize,  // Индекс шаблона Cloud
-    full_range: bool,
-}
-
-impl ObjectDetector {
-    fn new(base_scale_factor: f64) -> Self {
-        Self {
-            templates: Vec::new(),
-            base_scale_factor,
-            active_range: (0, 0), // Будет установлено при добавлении шаблонов
-            empty_template_index: 0,
-            cloud_template_index: 0,
-            full_range: true, // Флаг полного диапазона
-        }
-    }
-
-    fn update_active_range(&mut self, detected_numbers: &[u32]) {
-        if detected_numbers.is_empty() {
-            // If nothing is detected, use full range but ensure it's within bounds
-            self.active_range = (0, self.templates.len().saturating_sub(1));
-            self.full_range = true;
-            return;
-        }
-
-        // If was full range and something found - switch to targeted range
-        if self.full_range {
-            let min_detected = *detected_numbers.iter().min().unwrap();
-            let max_detected = *detected_numbers.iter().max().unwrap();
-
-            // Define new range with buffer
-            let new_min = min_detected.saturating_sub(5); // +5 previous levels
-            let new_max = max_detected + 8; // +8 next levels
-
-            // Find template indices for new range
-            let mut start = 0;
-            let mut end = self.templates.len().saturating_sub(1);
-
-            for (i, template) in self.templates.iter().enumerate() {
-                if let Some(num) = template
-                    .name
-                    .split_whitespace()
-                    .last()
-                    .and_then(|s| s.parse::<u32>().ok())
-                {
-                    if num >= new_min && num <= new_max {
-                        if i < start || start == 0 {
-                            start = i;
-                        }
-                        if i > end || end == self.templates.len().saturating_sub(1) {
-                            end = i;
-                        }
-                    }
-                }
-            }
-
-            // Ensure the range is valid
-            self.active_range = (
-                start.min(self.templates.len().saturating_sub(1)),
-                end.min(self.templates.len().saturating_sub(1)),
-            );
-            self.full_range = false;
-        } else {
-            // If already in targeted range - adjust it smoothly
-            let min_detected = *detected_numbers.iter().min().unwrap();
-            let max_detected = *detected_numbers.iter().max().unwrap();
-
-            // Current bounds
-            let (current_start, current_end) = self.active_range;
-
-            // New bounds with buffer
-            let new_min = min_detected.saturating_sub(3) as usize;
-            let new_max = (max_detected + 3) as usize;
-
-            // Smooth range expansion
-            let new_start = if new_min < current_start {
-                new_min
-            } else {
-                current_start
-            };
-            let new_end = if new_max > current_end {
-                new_max
-            } else {
-                current_end
-            };
-
-            // Ensure the range is valid
-            self.active_range = (
-                new_start.min(self.templates.len().saturating_sub(1)),
-                new_end.min(self.templates.len().saturating_sub(1)),
-            );
-        }
-    }
-
-    fn get_active_templates(&self) -> Vec<Arc<ObjectTemplate>> {
-        let mut result = Vec::new();
-
-        // Всегда включаем шаблон Empty
-        if self.empty_template_index < self.templates.len() {
-            result.push(self.templates[self.empty_template_index].clone());
-        }
-        if self.cloud_template_index < self.templates.len() {
-            result.push(self.templates[self.cloud_template_index].clone());
-        }
-
-        // Добавляем шаблоны из активного диапазона (исключая Empty, если он уже добавлен)
-        let (start, end) = self.active_range;
-        for i in start..=end {
-            if i < self.templates.len()
-                && (i != self.empty_template_index && i != self.cloud_template_index)
-            {
-                result.push(self.templates[i].clone());
-            }
-        }
-
-        result
-    }
-
-    fn add_template(
-        &mut self,
-        name: &str,
-        template_path: &str,
-        threshold: f64,
-        min_distance: f32,
-        red: f32,
-        green: f32,
-        blue: f32,
-        resolution: Option<f64>,
-    ) -> OpenCVResult<()> {
-        let template = ObjectTemplate::new(
-            name,
-            template_path,
-            threshold,
-            min_distance,
-            red,
-            green,
-            blue,
-            resolution,
-        )?;
-        self.templates.push(Arc::new(template));
-
-        self.active_range = (0, self.templates.len() - 1);
-        self.full_range = true;
-
-        Ok(())
-    }
-
-    fn detect_objects_optimized(
-        &mut self,
-        image: &Mat,
-        convert_to_grayscale: bool,
-    ) -> OpenCVResult<(Vec<DetectionResult>, u128)> {
-        let start_time = Instant::now();
-
-        // Подготовка изображения
-        let working_image = if convert_to_grayscale {
-            let mut gray = Mat::default();
-            cvt_color(
-                image,
-                &mut gray,
-                COLOR_BGR2GRAY,
-                0,
-                AlgorithmHint::ALGO_HINT_DEFAULT,
-            )?;
-            gray
-        } else {
-            image.clone()
-        };
-
-        // Масштабирование изображения
-        let mut resized = Mat::default();
-        resize(
-            &working_image,
-            &mut resized,
-            Size::new(0, 0),
-            self.base_scale_factor,
-            self.base_scale_factor,
-            INTER_AREA,
-        )?;
-
-        // Параллельное сопоставление шаблонов
-        let active_templates = self.get_active_templates();
-        let all_results: Vec<Vec<DetectionResult>> = active_templates
-            .par_iter()
-            .map(|template| {
-                let template_image = if convert_to_grayscale {
-                    &template.gray_template
-                } else {
-                    &template.template
-                };
-
-                // Масштабирование шаблона
-                let mut scaled_template = Mat::default();
-                let scale_factor = template.resolution.unwrap_or(self.base_scale_factor);
-                if resize(
-                    template_image,
-                    &mut scaled_template,
-                    Size::new(0, 0),
-                    scale_factor,
-                    scale_factor,
-                    INTER_AREA,
-                )
-                .is_err()
-                {
-                    return Vec::new();
-                }
-
-                let mut result_mat = Mat::default();
-                if imgproc::match_template(
-                    &resized,
-                    &scaled_template,
-                    &mut result_mat,
-                    TM_CCOEFF_NORMED,
-                    &Mat::default(),
-                )
-                .is_err()
-                {
-                    return Vec::new();
-                }
-
-                let mut thresholded = Mat::default();
-                if threshold(
-                    &result_mat,
-                    &mut thresholded,
-                    template.threshold,
-                    1.0,
-                    THRESH_BINARY,
-                )
-                .is_err()
-                {
-                    return Vec::new();
-                }
-
-                let mut mask_8u = Mat::default();
-                if thresholded
-                    .convert_to(&mut mask_8u, core::CV_8U, 255.0, 0.0)
-                    .is_err()
-                {
-                    return Vec::new();
-                }
-
-                let mut local_results = Vec::new();
-                let mut max_val = f64::MIN;
-                let mut max_loc = Point::default();
-
-                loop {
-                    if core::min_max_loc(
-                        &result_mat,
-                        None,
-                        Some(&mut max_val),
-                        None,
-                        Some(&mut max_loc),
-                        &mask_8u,
-                    )
-                    .is_err()
-                    {
-                        break;
-                    }
-
-                    if max_val < template.threshold {
-                        break;
-                    }
-
-                    local_results.push(DetectionResult {
-                        object_name: template.name.clone(),
-                        location: Point::new(
-                            (max_loc.x as f64 / self.base_scale_factor) as i32,
-                            (max_loc.y as f64 / self.base_scale_factor) as i32,
-                        ),
-                        confidence: max_val,
-                    });
-
-                    // Обнуляем найденную область
-                    let _ = imgproc::rectangle(
-                        &mut result_mat,
-                        Rect::new(
-                            max_loc.x - scaled_template.cols() / 2,
-                            max_loc.y - scaled_template.rows() / 2,
-                            scaled_template.cols(),
-                            scaled_template.rows(),
-                        ),
-                        Scalar::all(0.0),
-                        FILLED,
-                        LineTypes::LINE_8.into(),
-                        0,
-                    );
-
-                    let _ = imgproc::rectangle(
-                        &mut mask_8u,
-                        Rect::new(
-                            max_loc.x - scaled_template.cols() / 2,
-                            max_loc.y - scaled_template.rows() / 2,
-                            scaled_template.cols(),
-                            scaled_template.rows(),
-                        ),
-                        Scalar::all(0.0),
-                        FILLED,
-                        LineTypes::LINE_8.into(),
-                        0,
-                    );
-
-                    max_val = f64::MIN;
-                }
-
-                local_results
-            })
-            .collect();
-        let elapsed = start_time.elapsed();
-        let elapsed_ms = elapsed.as_millis();
-        // Очищаем терминал и выводим информацию
-        print!("\x1B[2J\x1B[3J\x1B[H");
-        io::stdout().flush().map_err(|e| {
-            opencv::Error::new(
-                opencv::core::StsError,
-                format!("Failed to flush stdout: {}", e),
-            )
-        })?;
-
-        let detected_numbers: Vec<u32> = all_results
-            .iter()
-            .flatten()
-            .filter_map(|d| {
-                d.object_name
-                    .split_whitespace()
-                    .last()
-                    .and_then(|s| s.parse().ok())
-            })
-            .collect();
-
-        self.update_active_range(&detected_numbers);
-
-        Ok((
-            self.filter_close_detections(all_results.into_iter().flatten().collect()),
-            elapsed_ms,
-        ))
-    }
-
-    fn filter_close_detections(&self, mut results: Vec<DetectionResult>) -> Vec<DetectionResult> {
-        results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
-
-        let mut filtered = Vec::new();
-        let mut occupied = Vec::new();
-
-        for result in results {
-            let too_close = occupied.iter().any(|(center, min_dist): &(Point, f32)| {
-                let dx = (center.x - result.location.x) as f32;
-                let dy = (center.y - result.location.y) as f32;
-                (dx * dx + dy * dy).sqrt() < *min_dist
-            });
-
-            if !too_close {
-                if let Some(template) = self.templates.iter().find(|t| t.name == result.object_name)
-                {
-                    occupied.push((result.location, template.min_distance));
-                    filtered.push(result);
-                }
-            }
-        }
-
-        filtered
-    }
-
-    fn draw_detections(&self, image: &mut Mat, detections: &[DetectionResult]) -> OpenCVResult<()> {
-        for detection in detections {
-            if let Some(template) = self
-                .templates
-                .iter()
-                .find(|t| t.name == detection.object_name)
-            {
-                let color = Scalar::new(
-                    template.blue.into(),
-                    template.green.into(),
-                    template.red.into(),
-                    0.0,
-                );
-
-                imgproc::rectangle(
-                    image,
-                    Rect::new(
-                        detection.location.x,
-                        detection.location.y,
-                        template.template.cols(),
-                        template.template.rows(),
-                    ),
-                    color,
-                    2,
-                    LineTypes::LINE_8.into(),
-                    0,
-                )?;
-
-                imgproc::put_text(
-                    image,
-                    &format!("{}: {:.2}", detection.object_name, detection.confidence),
-                    Point::new(detection.location.x, detection.location.y - 5),
-                    imgproc::FONT_HERSHEY_SIMPLEX,
-                    0.35,
-                    color,
-                    1,
-                    LineTypes::LINE_8.into(),
-                    false,
-                )?;
-            }
-        }
-        Ok(())
-    }
-}
-
-fn capture_window_by_title(window_title: &str, output: &str) -> AppResult<(i32, i32)> {
-    let geometry = Command::new("xwininfo")
-        .args(&["-name", window_title])
-        .output()?;
-
-    if !geometry.status.success() {
-        return Err(AppError::WindowNotFound(format!(
-            "Window '{}' not found",
-            window_title
-        )));
-    }
-
-    let geometry_output = String::from_utf8(geometry.stdout)?;
-
-    let parse_value = |s: &str| -> AppResult<i32> {
-        geometry_output
-            .lines()
-            .find(|l| l.trim().starts_with(s))
-            .and_then(|l| l.split(':').nth(1))
-            .and_then(|v| v.trim().split(' ').next())
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(|| {
-                AppError::WindowNotFound(format!("Could not parse {} from xwininfo output", s))
-            })
-    };
-
-    let x = parse_value("Absolute upper-left X")?;
-    let y = parse_value("Absolute upper-left Y")?;
-    let width = parse_value("Width")?;
-    let height = parse_value("Height")?;
-
-    let geometry_str = format!("{}x{}+{}+{}", width, height, x, y);
-    let output_file = format!("{}", output.replace(" ", "_"));
-
-    let status = Command::new("maim")
-        .args(&["-g", &geometry_str, &output_file])
-        .status()?;
-
-    if !status.success() {
-        let status_import = Command::new("import")
-            .args(&[
-                "-window",
-                &format!("0x{:x}", parse_window_id(&geometry_output)?),
-                &output_file,
-            ])
-            .status();
-
-        if status_import.is_err() || !status_import.unwrap().success() {
-            return Err(AppError::ScrotFailed(format!(
-                "Failed to capture window area with both maim and import"
-            )));
-        }
-    }
-
-    if !std::path::Path::new(&output_file).exists() {
-        return Err(AppError::ScrotFailed("Output file not created".to_string()));
-    }
-
-    Ok((x, y))
-}
-
-fn parse_window_id(geometry_output: &str) -> AppResult<u32> {
-    geometry_output
-        .lines()
-        .find(|l| l.contains("Window id:"))
-        .and_then(|l| l.split_whitespace().nth(3))
-        .and_then(|id| {
-            if id.starts_with("0x") {
-                u32::from_str_radix(&id[2..], 16).ok()
-            } else {
-                id.parse().ok()
-            }
-        })
-        .ok_or_else(|| AppError::WindowNotFound("Could not parse window ID".to_string()))
-}
+use std::fs;
+use std::process::Command;
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 
 fn change_window_title(partial_title: &str, new_title: &str) -> AppResult<()> {
     // 1. Пробуем найти через wmctrl (более надежный)
@@ -802,39 +131,6 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
     }
 }
 
-fn get_window_size(window_title: &str) -> AppResult<(i32, i32)> {
-    let output = Command::new("xwininfo")
-        .args(&["-name", window_title])
-        .output()?;
-
-    if !output.status.success() {
-        return Err(AppError::WindowNotFound(format!(
-            "Window '{}' not found",
-            window_title
-        )));
-    }
-
-    let output_str = String::from_utf8(output.stdout)?;
-
-    let width = output_str
-        .lines()
-        .find(|l| l.trim().starts_with("Width"))
-        .and_then(|l| l.split(':').nth(1))
-        .and_then(|v| v.trim().split(' ').next())
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| AppError::WindowNotFound("Could not parse width".to_string()))?;
-
-    let height = output_str
-        .lines()
-        .find(|l| l.trim().starts_with("Height"))
-        .and_then(|l| l.split(':').nth(1))
-        .and_then(|v| v.trim().split(' ').next())
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| AppError::WindowNotFound("Could not parse height".to_string()))?;
-
-    Ok((width, height))
-}
-
 // Функция для генерации кривой Безье с человеческими характеристиками
 fn generate_human_like_path(
     start: (i32, i32),
@@ -924,7 +220,8 @@ fn human_like_move(x: i32, y: i32, settings: &HumanLikeMovementSettings) -> AppR
         let distance = ((dx * dx + dy * dy) as f64).sqrt();
 
         // Базовое время движения (миллисекунды на пиксель)
-        let base_speed = 0.1 + rng.gen_range(-settings.speed_variation..settings.speed_variation);
+        let base_speed = settings.base_speed
+            + rng.gen_range(-settings.speed_variation..settings.speed_variation);
         let move_time = (distance * base_speed).max(1.0) as u64;
 
         // Плавное перемещение между точками
@@ -1337,9 +634,7 @@ fn main() -> AppResult<()> {
         settings.reference_height,
     )?;
 
-    let mut detector = ObjectDetector::new(
-        settings.resolution,
-    );
+    let mut detector = ObjectDetector::new(settings.resolution);
 
     for (i, template_settings) in settings.templates.iter().enumerate() {
         detector.add_template(
@@ -1387,7 +682,7 @@ fn main() -> AppResult<()> {
         let is_on_window = is_cursor_in_window(window_x, window_y, window_width, window_height)?;
 
         detector.draw_detections(&mut image, &detections)?;
-        imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
+        imgcodecs::imwrite("result.png", &image, &Vector::new())?;
 
         // Обработка облака мангинитов
         let cloud: Vec<DetectionResult> = detections
@@ -1397,64 +692,79 @@ fn main() -> AppResult<()> {
             .collect();
 
         if cloud.len() > 0 {
-            // Получаем размеры окна
-            let (window_width, window_height) = get_window_size(&settings.window_title)?;
-
-            // Двигаем мышью слева направо по всему окну
-            let start_x = window_x + (4 + settings.random_offset.max_x_offset);
-            let end_x = window_x + window_width - (4 + settings.random_offset.max_x_offset);
-            let y_pos = window_y + window_height / 4; // Средняя высота окна
-
             let fast_movement_settings = HumanLikeMovementSettings {
                 enabled: true,
-                max_deviation: settings.human_like_movement.max_deviation,
-                speed_variation: settings.human_like_movement.speed_variation / 5.0,
-                curve_smoothness: 8, // Меньше точек = более прямое движение
-                min_pause_ms: 1,     // Минимальные паузы
-                max_pause_ms: 2,
-                base_speed: settings.human_like_movement.base_speed * 15.0, // В 15 раз быстрее
-                min_down_ms: 3,
-                max_down_ms: 5,
-                min_up_ms: 3,
-                max_up_ms: 5,
-                min_move_delay_ms: 1,
+                max_deviation: 0.000001,
+                speed_variation: 0.000001,
+                curve_smoothness: 11, // Меньше точек = более прямое движение
+                min_pause_ms: 0,      // Минимальные паузы
+                max_pause_ms: 1,
+                base_speed: 0.000001,
+                min_down_ms: 0,
+                max_down_ms: 1,
+                min_up_ms: 0,
+                max_up_ms: 1,
+                min_move_delay_ms: 0,
                 max_move_delay_ms: 1,
             };
 
-            // Плавное перемещение по зигзагообразному маршруту
-            let points = [
-                (start_x, y_pos),
-                (end_x, y_pos),
-                (start_x, y_pos),
-                (start_x, y_pos + 150),
-                (end_x, y_pos + 150),
-                (end_x, y_pos + 250),
-                (start_x, y_pos + 250),
-                (start_x, y_pos + 350),
-                (end_x, y_pos + 350),
-            ];
+            // Получаем размеры окна
+            let (window_width, window_height) = get_window_size(&settings.window_title)?;
+
+            // Вычисляем шаг для зигзага (примерно 1/8 высоты окна)
+            let step_height = (window_height - 260) / 9;
+
+            // Создаем зигзагообразный маршрут от верха до низа окна
+            let mut points = Vec::new();
+            let mut current_y = window_y + 50 + step_height;
+
+            // Начинаем с левого верхнего угла
+            let mut current_x = window_x + (4 + settings.random_offset.max_x_offset);
+            points.push((current_x, current_y));
+
+            while current_y < window_y + window_height - step_height {
+                // Движение вправо
+                current_x = window_x + window_width - (4 + settings.random_offset.max_x_offset);
+                points.push((current_x, current_y));
+
+                // Движение вниз
+                current_y += step_height;
+                points.push((current_x, current_y));
+
+                // Движение влево
+                current_x = window_x + (4 + settings.random_offset.max_x_offset);
+                points.push((current_x, current_y));
+
+                // Движение вниз (если не вышли за границы)
+                if current_y < window_y + window_height - step_height {
+                    current_y += step_height;
+                    points.push((current_x, current_y));
+                }
+            }
 
             // 1. Перемещаемся к начальной точке без нажатия
             human_like_move(points[0].0, points[0].1, &fast_movement_settings)?;
-
+            thread::sleep(Duration::from_millis(1));
             // 2. Нажимаем кнопку мыши
             Command::new("xdotool").args(&["mousedown", "1"]).status()?;
 
-            // 3. Движение вперед по остальным точкам
-            for &(x, y) in &points[1..] {
+            // 3. Движение по всем точкам с плавными переходами
+            for &(x, y) in points.iter().skip(1) {
                 human_like_move(x, y, &fast_movement_settings)?;
+                thread::sleep(Duration::from_millis(1));
             }
 
-            // Движение назад (исключая последнюю точку)
-            for &(x, y) in points[..points.len() - 1].iter().rev() {
+            // 4. Дополнительное движение назад для лучшего покрытия (опционально)
+            for &(x, y) in points.iter().rev().skip(1) {
                 human_like_move(x, y, &fast_movement_settings)?;
+                thread::sleep(Duration::from_millis(1));
             }
 
             // Отпускаем кнопку мыши
             Command::new("xdotool").args(&["mouseup", "1"]).status()?;
 
             // После обработки облака продолжаем основной цикл
-            thread::sleep(Duration::from_millis(1));
+            thread::sleep(Duration::from_millis(3));
             continue;
         }
 
@@ -1493,13 +803,8 @@ fn main() -> AppResult<()> {
                 num_a.cmp(&num_b)
             });
 
-            let (barrels, (original_x, original_y)) = process_barrels(
-                window_x,
-                window_y,
-                barrels,
-                &mut detector,
-                &settings,
-            )?;
+            let (barrels, (original_x, original_y)) =
+                process_barrels(window_x, window_y, barrels, &mut detector, &settings)?;
 
             let (min_lvl, max_lvl, merges_remaining) = calculate_required_merges(&barrels);
 
