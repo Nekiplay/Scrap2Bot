@@ -711,6 +711,46 @@ fn main() -> AppResult<()> {
             // Получаем размеры окна
             let (window_width, window_height) = get_window_size(&settings.window_title)?;
 
+            // Параметры отрисовки
+            let cell_width = 4;
+            let line_length = 4 * (cell_width + 2) + 1;
+            let mut drop_positions = vec![0usize; 5]; // Позиции 5 капель
+
+            // Функция отрисовки облака с каплями
+            let draw_cloud = |drop_positions: &[usize], is_moving_right: bool| {
+                print!("\x1B[2J\x1B[1;1H"); // Очистка экрана
+
+                // Верхняя граница
+                println!("{}", "-".repeat(line_length));
+
+                // Облако
+                println!("|{:^width$}|", "  .-~~~-.", width = line_length - 2);
+                println!("|{:^width$}|", " .'       '.", width = line_length - 2);
+                println!("|{:^width$}|", "(           )", width = line_length - 2);
+                println!("|{:^width$}|", " `~-._____.-'", width = line_length - 2);
+
+                // Капли дождя
+                for &pos in drop_positions {
+                    println!(
+                        "|{}{}|",
+                        " ".repeat(pos as usize),
+                        "\x1B[34m|\x1B[0m" // Синяя капля
+                    );
+                }
+
+                // Нижняя граница
+                println!("{}", "-".repeat(line_length));
+
+                // Статус
+                let status = if is_moving_right {
+                    "\x1B[36mCollecting magnets >>\x1B[0m"
+                } else {
+                    "\x1B[36mCollecting magnets <<\x1B[0m"
+                };
+                println!("|{:^width$}|", status, width = line_length - 2);
+                println!("{}", "-".repeat(line_length));
+            };
+
             // Вычисляем шаг для зигзага (примерно 1/8 высоты окна)
             let step_height = (window_height - 260) / 9;
 
@@ -721,6 +761,10 @@ fn main() -> AppResult<()> {
 
             // 1. Перемещаемся к начальной точке (левый верхний угол) с human-like движением
             human_like_move(left_x, current_y, &fast_movement_settings)?;
+            for i in 0..5 {
+                drop_positions[i as usize] = (i * 3) % (line_length - 4);
+            }
+            draw_cloud(&drop_positions, true);
             thread::sleep(Duration::from_millis(1));
 
             // 2. Нажимаем кнопку мыши
@@ -729,6 +773,11 @@ fn main() -> AppResult<()> {
             while current_y < window_y + window_height - step_height {
                 // Движение вправо - с human-like движением
                 human_like_move(right_x, current_y, &fast_movement_settings)?;
+                for i in 0..5 {
+                    drop_positions[i as usize] =
+                        (drop_positions[i as usize] + 5) % (line_length - 4);
+                }
+                draw_cloud(&drop_positions, true);
                 thread::sleep(Duration::from_millis(1));
 
                 // Движение вниз - прямое перемещение без human-like
@@ -736,10 +785,20 @@ fn main() -> AppResult<()> {
                 Command::new("xdotool")
                     .args(&["mousemove", &right_x.to_string(), &current_y.to_string()])
                     .status()?;
+                for i in 0..5 {
+                    drop_positions[i as usize] =
+                        (drop_positions[i as usize] + 2) % (line_length - 4);
+                }
+                draw_cloud(&drop_positions, true);
                 thread::sleep(Duration::from_millis(1));
 
                 // Движение влево - с human-like движением
                 human_like_move(left_x, current_y, &fast_movement_settings)?;
+                for i in 0..5 {
+                    drop_positions[i as usize] =
+                        (drop_positions[i as usize].max(5) - 5) % (line_length - 4);
+                }
+                draw_cloud(&drop_positions, false);
                 thread::sleep(Duration::from_millis(1));
 
                 // Движение вниз (если не вышли за границы) - прямое перемещение без human-like
@@ -748,6 +807,11 @@ fn main() -> AppResult<()> {
                     Command::new("xdotool")
                         .args(&["mousemove", &left_x.to_string(), &current_y.to_string()])
                         .status()?;
+                    for i in 0..5 {
+                        drop_positions[i as usize] =
+                            (drop_positions[i as usize] + 3) % (line_length - 4);
+                    }
+                    draw_cloud(&drop_positions, false);
                     thread::sleep(Duration::from_millis(1));
                 }
             }
