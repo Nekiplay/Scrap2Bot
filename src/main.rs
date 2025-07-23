@@ -1,4 +1,5 @@
 use crossterm::cursor::MoveTo;
+use crossterm::terminal::SetTitle;
 use crossterm::{execute, terminal::*};
 use opencv::{
     Result as OpenCVResult,
@@ -18,9 +19,6 @@ use std::io;
 use std::io::Write;
 use std::{error::Error, fmt, fs, process::Command, thread, time::Duration};
 use std::{sync::Arc, time::Instant};
-use crossterm::{
-    terminal::{SetTitle},
-};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Settings {
@@ -218,6 +216,7 @@ struct ObjectDetector {
     reference_size: Size,
     active_range: (usize, usize), // (start, end) индексы активных шаблонов
     empty_template_index: usize,  // Индекс шаблона Empty
+    cloud_template_index: usize,  // Индекс шаблона Cloud
     full_range: bool,
 }
 
@@ -229,6 +228,7 @@ impl ObjectDetector {
             reference_size: Size::new(reference_width, reference_height),
             active_range: (0, 0), // Будет установлено при добавлении шаблонов
             empty_template_index: 0,
+            cloud_template_index: 0,
             full_range: true, // Флаг полного диапазона
         }
     }
@@ -248,7 +248,7 @@ impl ObjectDetector {
 
             // Define new range with buffer
             let new_min = min_detected.saturating_sub(5); // +5 previous levels
-            let new_max = max_detected + 5; // +5 next levels
+            let new_max = max_detected + 8; // +8 next levels
 
             // Find template indices for new range
             let mut start = 0;
@@ -317,11 +317,16 @@ impl ObjectDetector {
         if self.empty_template_index < self.templates.len() {
             result.push(self.templates[self.empty_template_index].clone());
         }
+        if self.cloud_template_index < self.templates.len() {
+            result.push(self.templates[self.cloud_template_index].clone());
+        }
 
         // Добавляем шаблоны из активного диапазона (исключая Empty, если он уже добавлен)
         let (start, end) = self.active_range;
         for i in start..=end {
-            if i < self.templates.len() && i != self.empty_template_index {
+            if i < self.templates.len()
+                && (i != self.empty_template_index && i != self.cloud_template_index)
+            {
                 result.push(self.templates[i].clone());
             }
         }
@@ -542,7 +547,10 @@ impl ObjectDetector {
 
         self.update_active_range(&detected_numbers);
 
-        Ok((self.filter_close_detections(all_results.into_iter().flatten().collect()), elapsed_ms))
+        Ok((
+            self.filter_close_detections(all_results.into_iter().flatten().collect()),
+            elapsed_ms,
+        ))
     }
 
     fn filter_close_detections(&self, mut results: Vec<DetectionResult>) -> Vec<DetectionResult> {
@@ -691,6 +699,70 @@ fn parse_window_id(geometry_output: &str) -> AppResult<u32> {
         .ok_or_else(|| AppError::WindowNotFound("Could not parse window ID".to_string()))
 }
 
+fn change_window_title(partial_title: &str, new_title: &str) -> AppResult<()> {
+    // 1. Пробуем найти через wmctrl (более надежный)
+    let wmctrl_output = Command::new("wmctrl").args(&["-l"]).output()?;
+
+    if !wmctrl_output.status.success() {
+        return Err(AppError::WindowNotFound(
+            "Failed to list windows with wmctrl".to_string(),
+        ));
+    }
+
+    let output_str = String::from_utf8(wmctrl_output.stdout)?;
+    let mut window_id = None;
+
+    // Ищем окно, содержащее искомую подстроку
+    for line in output_str.lines() {
+        if line.contains(partial_title) {
+            if let Some(id) = line.split_whitespace().next() {
+                window_id = Some(id.to_string());
+                break;
+            }
+        }
+    }
+
+    // 2. Если не нашли через wmctrl, пробуем xdotool
+    let window_id = match window_id {
+        Some(id) => id,
+        None => {
+            let xdotool_output = Command::new("xdotool")
+                .args(&["search", "--name", partial_title, "--limit", "1"])
+                .output()?;
+
+            if !xdotool_output.status.success() {
+                return Err(AppError::WindowNotFound(format!(
+                    "Window containing '{}' not found with either wmctrl or xdotool",
+                    partial_title
+                )));
+            }
+
+            String::from_utf8(xdotool_output.stdout)?.trim().to_string()
+        }
+    };
+
+    if window_id.is_empty() {
+        return Err(AppError::WindowNotFound(format!(
+            "Window containing '{}' not found",
+            partial_title
+        )));
+    }
+
+    // 3. Пробуем изменить название через wmctrl
+    let wmctrl_status = Command::new("wmctrl")
+        .args(&["-ir", &window_id, "-T", new_title])
+        .status();
+
+    // 4. Если wmctrl не сработал, пробуем xdotool
+    if wmctrl_status.is_err() || !wmctrl_status.unwrap().success() {
+        Command::new("xdotool")
+            .args(&["set_window", "--name", new_title, &window_id])
+            .status()?;
+    }
+
+    Ok(())
+}
+
 fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
     let settings_path = "settings.json";
 
@@ -768,45 +840,6 @@ fn get_window_size(window_title: &str) -> AppResult<(i32, i32)> {
         .ok_or_else(|| AppError::WindowNotFound("Could not parse height".to_string()))?;
 
     Ok((width, height))
-}
-
-fn is_window_visible(window_title: &str) -> AppResult<bool> {
-    // Используем xwininfo для проверки состояния окна
-    let output = Command::new("xwininfo")
-        .args(&["-name", window_title])
-        .output()?;
-
-    if !output.status.success() {
-        return Err(AppError::WindowNotFound(format!(
-            "Window '{}' not found",
-            window_title
-        )));
-    }
-
-    let output_str = String::from_utf8(output.stdout)?;
-    if output_str.contains("window state: Iconic") {
-        return Err(AppError::WindowNotFound(format!(
-            "Window '{}' is minimized",
-            window_title
-        )));
-    }
-
-    // Проверяем, есть ли строка "Map State: IsViewable"
-    let is_visible = output_str
-        .lines()
-        .any(|l| l.trim().contains("Map State: IsViewable"));
-
-    Ok(is_visible)
-}
-
-fn check_window_visibility(window_title: &str) -> AppResult<()> {
-    if !is_window_visible(window_title)? {
-        return Err(AppError::WindowNotFound(format!(
-            "Window '{}' is obscured or minimized",
-            window_title
-        )));
-    }
-    Ok(())
 }
 
 // Функция для генерации кривой Безье с человеческими характеристиками
@@ -968,7 +1001,7 @@ fn display_results_as_table(
     // Выводим таблицу с цветами
     print!("{} {}ms\n", "-".repeat(line_length), detection_time);
 
-     for row in table {
+    for row in table {
         print!("|");
         for cell in row {
             match cell {
@@ -1304,7 +1337,10 @@ fn main() -> AppResult<()> {
     execute!(std::io::stdout(), SetTitle("Scrap II Bot"))?;
 
     let window_title = "M2006C3MNG";
-    let settings = load_or_create_settings(window_title)?;
+    let mut settings = load_or_create_settings(window_title)?;
+
+    let _ = change_window_title(&settings.window_title, "Scrap II");
+    settings.window_title = String::from("Scrap II");
 
     check_and_suggest_window_size(
         &settings.window_title,
@@ -1332,6 +1368,8 @@ fn main() -> AppResult<()> {
 
         if template_settings.name == "Empty" {
             detector.empty_template_index = i;
+        } else if template_settings.name == "Cloud" {
+            detector.cloud_template_index = i;
         }
     }
 
@@ -1345,172 +1383,207 @@ fn main() -> AppResult<()> {
         let screenshot_path = "screenshot.png";
         let (window_x, window_y) =
             capture_window_by_title(&settings.window_title, screenshot_path)?;
+        let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR)
+            .map_err(|e| AppError::ImageProcessing(format!("Failed to load screenshot: {}", e)))?;
 
-        match check_window_visibility(&settings.window_title) {
-            Ok(_) => {
-                let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR).map_err(|e| {
-                    AppError::ImageProcessing(format!("Failed to load screenshot: {}", e))
-                })?;
-
-                if image.empty() {
-                    return Err(AppError::ImageProcessing(
-                        "Loaded image is empty".to_string(),
-                    ));
-                }
-
-                let (detections, detection_time) =
-                    detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
-
-                let (window_width, window_height) = get_window_size(&settings.window_title)?;
-
-                let is_on_window =
-                    is_cursor_in_window(window_x, window_y, window_width, window_height)?;
-                display_results_as_table(&detections, 4, 5, &detector.templates, detection_time.try_into().unwrap_or(0));
-
-                detector.draw_detections(&mut image, &detections)?;
-                imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
-
-                // Обработка бочек
-                let mut barrels: Vec<DetectionResult> = detections
-                    .into_iter()
-                    .filter(|d| d.object_name.starts_with("Barrel"))
-                    .collect();
-
-                // Сортируем бочки по номеру (от меньшего к большему)
-                barrels.sort_by(|a, b| {
-                    let num_a = a
-                        .object_name
-                        .split_whitespace()
-                        .last()
-                        .unwrap_or("0")
-                        .parse()
-                        .unwrap_or(0);
-                    let num_b = b
-                        .object_name
-                        .split_whitespace()
-                        .last()
-                        .unwrap_or("0")
-                        .parse()
-                        .unwrap_or(0);
-                    num_a.cmp(&num_b)
-                });
-
-                let (barrels, (original_x, original_y)) = process_barrels(
-                    window_x,
-                    window_y,
-                    window_width,
-                    window_height,
-                    barrels,
-                    &mut detector,
-                    &settings,
-                )?;
-
-                // В функции main после обнаружения бочек:
-                let min_barrel_number = barrels.iter().fold(u32::MAX, |min, barrel| {
-                    let current_num = barrel
-                        .object_name
-                        .split_whitespace()
-                        .last()
-                        .unwrap_or("0")
-                        .parse()
-                        .unwrap_or(0);
-                    min.min(current_num)
-                });
-
-                let max_barrel_number = barrels.iter().fold(0, |max, barrel| {
-                    let current_num = barrel
-                        .object_name
-                        .split_whitespace()
-                        .last()
-                        .unwrap_or("0")
-                        .parse()
-                        .unwrap_or(0);
-                    max.max(current_num)
-                });
-
-                let (min_lvl, max_lvl, merges_remaining) = calculate_required_merges(&barrels);
-
-                // Находим цвет для максимального уровня бочки
-                let min_level_color = detector
-                    .templates
-                    .iter()
-                    .find(|t| {
-                        t.name
-                            .split_whitespace()
-                            .last()
-                            .and_then(|s| s.parse::<u32>().ok())
-                            == Some(min_lvl)
-                    })
-                    .map(|t| (t.red, t.green, t.blue))
-                    .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
-
-
-                // Находим цвет для максимального уровня бочки
-                let max_level_color = detector
-                    .templates
-                    .iter()
-                    .find(|t| {
-                        t.name
-                            .split_whitespace()
-                            .last()
-                            .and_then(|s| s.parse::<u32>().ok())
-                            == Some(max_lvl)
-                    })
-                    .map(|t| (t.red, t.green, t.blue))
-                    .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
-
-                // Находим цвет для целевого уровня (max_lvl + 1)
-                let target_level_color = detector
-                    .templates
-                    .iter()
-                    .find(|t| {
-                        t.name
-                            .split_whitespace()
-                            .last()
-                            .and_then(|s| s.parse::<u32>().ok())
-                            == Some(max_lvl + 1)
-                    })
-                    .map(|t| (t.red, t.green, t.blue))
-                    .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
-
-                print!(
-                    "| ⭣\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m ⭡\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m | ⭢\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m ⭤{}",
-                    min_level_color.0,
-                    min_level_color.1,
-                    min_level_color.2,
-                    min_lvl,
-                    max_level_color.0,
-                    max_level_color.1,
-                    max_level_color.2,
-                    max_lvl,
-                    target_level_color.0,
-                    target_level_color.1,
-                    target_level_color.2,
-                    max_lvl + 1,
-                    merges_remaining
-                );
-                let cell_width = 4; // Минимальная ширина для "0" и двузначных чисел
-                let line_length = 4 * (cell_width + 2) + 1;
-                print!("\n{}\n", "-".repeat(line_length));
-
-
-                if !is_on_window && settings.human_like_movement.enabled {
-                    human_like_move(original_x, original_y, &settings.human_like_movement)?;
-                } else if !&settings.human_like_movement.enabled {
-                    human_like_move(original_x, original_y, &settings.human_like_movement)?;
-                }
-                if !infinite_mode {
-                    break;
-                }
-
-                thread::sleep(Duration::from_millis(settings.rescan_delay));
-            }
-            Err(e) => {
-                // Произошла ошибка при проверке
-                eprint!("Error checking window visibility: {}\n", e);
-                return Err(e);
-            }
+        if image.empty() {
+            return Err(AppError::ImageProcessing(
+                "Loaded image is empty".to_string(),
+            ));
         }
+
+        let (detections, detection_time) =
+            detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
+
+        let (window_width, window_height) = get_window_size(&settings.window_title)?;
+
+        let is_on_window = is_cursor_in_window(window_x, window_y, window_width, window_height)?;
+
+        detector.draw_detections(&mut image, &detections)?;
+        imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
+
+        // Обработка облака мангинитов
+        let mut cloud: Vec<DetectionResult> = detections
+            .clone()
+            .into_iter()
+            .filter(|d| d.object_name.starts_with("Cloud"))
+            .collect();
+
+        if cloud.len() > 0 {
+            // Получаем размеры окна
+            let (window_width, window_height) = get_window_size(&settings.window_title)?;
+
+            // Двигаем мышью слева направо по всему окну
+            let start_x = window_x + (4 + settings.random_offset.max_x_offset);
+            let end_x = window_x + window_width - (4 + settings.random_offset.max_x_offset);
+            let y_pos = window_y + window_height / 4; // Средняя высота окна
+
+            let fast_movement_settings = HumanLikeMovementSettings {
+                enabled: true,
+                max_deviation: settings.human_like_movement.max_deviation,
+                speed_variation: settings.human_like_movement.speed_variation / 5.0,
+                curve_smoothness: 8, // Меньше точек = более прямое движение
+                min_pause_ms: 1,      // Минимальные паузы
+                max_pause_ms: 2,
+                base_speed: settings.human_like_movement.base_speed * 15.0, // В 5 раз быстрее
+                min_down_ms: 1,
+                max_down_ms: 2,
+                min_up_ms: 1,
+                max_up_ms: 2,
+                min_move_delay_ms: 1,
+                max_move_delay_ms: 2,
+            };
+
+            // Плавное перемещение слева направо
+            human_like_move(start_x, y_pos, &fast_movement_settings)?;
+            // Нажимаем кнопку мыши
+            Command::new("xdotool").args(&["mousedown", "1"]).status()?;
+
+            human_like_move(end_x, y_pos, &fast_movement_settings)?;
+
+            human_like_move(start_x, y_pos, &fast_movement_settings)?;
+
+            human_like_move(start_x, y_pos + 150, &fast_movement_settings)?;
+
+            human_like_move(end_x, y_pos + 150, &fast_movement_settings)?;
+
+            human_like_move(end_x, y_pos + 250, &fast_movement_settings)?;
+
+            human_like_move(start_x, y_pos + 250, &fast_movement_settings)?;
+
+            human_like_move(start_x, y_pos + 350, &fast_movement_settings)?;
+
+            human_like_move(end_x, y_pos + 350, &fast_movement_settings)?;
+
+            // Отпускаем кнопку мыши
+            Command::new("xdotool").args(&["mouseup", "1"]).status()?;
+
+            // После обработки облака продолжаем основной цикл
+            thread::sleep(Duration::from_millis(1));
+            continue;
+        }
+
+        // Обработка бочек
+        let mut barrels: Vec<DetectionResult> = detections
+            .clone()
+            .into_iter()
+            .filter(|d| d.object_name.starts_with("Barrel"))
+            .collect();
+
+        if barrels.len() > 0 {
+            display_results_as_table(
+                &detections,
+                4,
+                5,
+                &detector.templates,
+                detection_time.try_into().unwrap_or(0),
+            );
+
+            // Сортируем бочки по номеру (от меньшего к большему)
+            barrels.sort_by(|a, b| {
+                let num_a = a
+                    .object_name
+                    .split_whitespace()
+                    .last()
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0);
+                let num_b = b
+                    .object_name
+                    .split_whitespace()
+                    .last()
+                    .unwrap_or("0")
+                    .parse()
+                    .unwrap_or(0);
+                num_a.cmp(&num_b)
+            });
+
+            let (barrels, (original_x, original_y)) = process_barrels(
+                window_x,
+                window_y,
+                window_width,
+                window_height,
+                barrels,
+                &mut detector,
+                &settings,
+            )?;
+
+            let (min_lvl, max_lvl, merges_remaining) = calculate_required_merges(&barrels);
+
+            // Находим цвет для максимального уровня бочки
+            let min_level_color = detector
+                .templates
+                .iter()
+                .find(|t| {
+                    t.name
+                        .split_whitespace()
+                        .last()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        == Some(min_lvl)
+                })
+                .map(|t| (t.red, t.green, t.blue))
+                .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
+
+            // Находим цвет для максимального уровня бочки
+            let max_level_color = detector
+                .templates
+                .iter()
+                .find(|t| {
+                    t.name
+                        .split_whitespace()
+                        .last()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        == Some(max_lvl)
+                })
+                .map(|t| (t.red, t.green, t.blue))
+                .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
+
+            // Находим цвет для целевого уровня (max_lvl + 1)
+            let target_level_color = detector
+                .templates
+                .iter()
+                .find(|t| {
+                    t.name
+                        .split_whitespace()
+                        .last()
+                        .and_then(|s| s.parse::<u32>().ok())
+                        == Some(max_lvl + 1)
+                })
+                .map(|t| (t.red, t.green, t.blue))
+                .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
+
+            print!(
+                "| ⭣\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m ⭡\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m | ⭢\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m ⭤{}",
+                min_level_color.0,
+                min_level_color.1,
+                min_level_color.2,
+                min_lvl,
+                max_level_color.0,
+                max_level_color.1,
+                max_level_color.2,
+                max_lvl,
+                target_level_color.0,
+                target_level_color.1,
+                target_level_color.2,
+                max_lvl + 1,
+                merges_remaining
+            );
+            let cell_width = 4; // Минимальная ширина для "0" и двузначных чисел
+            let line_length = 4 * (cell_width + 2) + 1;
+            print!("\n{}\n", "-".repeat(line_length));
+
+            if !is_on_window && settings.human_like_movement.enabled {
+                human_like_move(original_x, original_y, &settings.human_like_movement)?;
+            } else if !&settings.human_like_movement.enabled {
+                human_like_move(original_x, original_y, &settings.human_like_movement)?;
+            }
+            if !infinite_mode {
+                break;
+            }
+
+            thread::sleep(Duration::from_millis(settings.rescan_delay));
+        }
+        thread::sleep(Duration::from_millis(5));
     }
 
     Ok(())
