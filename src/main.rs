@@ -348,31 +348,34 @@ fn display_results_as_table(
     println!("╝ {}ms", detection_time);
 
     // Statistics section
-let min_w = 6;  // Ширина колонки для минимального уровня
-let max_w = 6;  // Ширина колонки для максимального уровня
-let target_w = 6;  // Ширина колонки для целевого уровня
-let merges_w = 6;  // Ширина колонки для счетчика объединений
+    let min_w = 6; // Ширина колонки для минимального уровня
+    let max_w = 6; // Ширина колонки для максимального уровня
+    let target_w = 6; // Ширина колонки для целевого уровня
+    let merges_w = 6; // Ширина колонки для счетчика объединений
 
-println!("╔{}╦{}╦{}╦{}╗", 
-    "═".repeat(min_w + 2),  // +2 для учета пробелов
-    "═".repeat(max_w + 2),
-    "═".repeat(target_w + 2),
-    "═".repeat(merges_w + 2)
-);
+    println!(
+        "╔{}╦{}╦{}╦{}╗",
+        "═".repeat(min_w + 2), // +2 для учета пробелов
+        "═".repeat(max_w + 2),
+        "═".repeat(target_w + 2),
+        "═".repeat(merges_w + 2)
+    );
 
-println!("║ {:<min_w$} ║ {:<max_w$} ║ {:<target_w$} ║ {:>merges_w$} ║",
-    format!("⭣{}", min_lvl),
-    format!("⭡{}", max_lvl),
-    format!("⭢{}", max_lvl + 1),
-    merges_remaining
-);
+    println!(
+        "║ {:<min_w$} ║ {:<max_w$} ║ {:<target_w$} ║ {:>merges_w$} ║",
+        format!("⭣{}", min_lvl),
+        format!("⭡{}", max_lvl),
+        format!("⭢{}", max_lvl + 1),
+        merges_remaining
+    );
 
-println!("╚{}╩{}╩{}╩{}╝", 
-    "═".repeat(min_w + 2),
-    "═".repeat(max_w + 2),
-    "═".repeat(target_w + 2),
-    "═".repeat(merges_w + 2)
-);
+    println!(
+        "╚{}╩{}╩{}╩{}╝",
+        "═".repeat(min_w + 2),
+        "═".repeat(max_w + 2),
+        "═".repeat(target_w + 2),
+        "═".repeat(merges_w + 2)
+    );
 }
 
 fn check_and_suggest_window_size(
@@ -790,29 +793,37 @@ fn main() -> AppResult<()> {
             let draw_cloud = |drop_positions: &[usize], is_moving_right: bool| {
                 print!("\x1B[2J\x1B[1;1H"); // Очистка экрана
 
-                // Верхняя граница
-                println!("{}", "-".repeat(line_length));
+                // Верхняя граница (как в таблице)
+                print!("╔");
+                for _ in 0..(line_length - 2) {
+                    print!("═");
+                }
+                println!("╗");
 
                 // Облако
-                println!("|{:^width$}|", "  .-~~~-.", width = line_length - 2);
-                println!("|{:^width$}|", " .'       '.", width = line_length - 2);
-                println!("|{:^width$}|", "(           )", width = line_length - 2);
-                println!("|{:^width$}|", " `~-._____.-'", width = line_length - 2);
+                println!("║{:^width$}║", "  .-~~~-.", width = line_length - 2);
+                println!("║{:^width$}║", " .'       '.", width = line_length - 2);
+                println!("║{:^width$}║", "(           )", width = line_length - 2);
+                println!("║{:^width$}║", " `~-._____.-'", width = line_length - 2);
 
                 // Капли дождя
                 for &pos in drop_positions {
-                    // Ограничиваем позицию внутри границ (минус 2 символа для границ)
+                    // Ограничиваем позицию внутри границ
                     let pos = pos.min(line_length - 4);
                     println!(
-                        "| {}{}{} |",
+                        "║ {}{}{} ║",
                         " ".repeat(pos),
                         "\x1B[34m|\x1B[0m", // Синяя капля
                         " ".repeat(line_length - 4 - pos - 1)
                     );
                 }
 
-                // Нижняя граница
-                println!("{}", "-".repeat(line_length));
+                // Нижняя граница (как в таблице)
+                print!("╚");
+                for _ in 0..(line_length - 2) {
+                    print!("═");
+                }
+                println!("╝");
 
                 // Статус с правильным выравниванием
                 let status = if is_moving_right {
@@ -825,14 +836,25 @@ fn main() -> AppResult<()> {
                 let clean_status = status.replace("\x1B[36m", "").replace("\x1B[0m", "");
                 let padding = line_length.saturating_sub(clean_status.len() + 2) / 2;
 
+                // Статусная строка с границами
+                print!("╔");
+                for _ in 0..(line_length - 2) {
+                    print!("═");
+                }
+                println!("╗");
+
                 println!(
-                    "|{}{}{}|",
+                    "║{}{}{}║",
                     " ".repeat(padding),
                     status,
                     " ".repeat(line_length - clean_status.len() - 2 - padding)
                 );
 
-                println!("{}", "-".repeat(line_length))
+                print!("╚");
+                for _ in 0..(line_length - 2) {
+                    print!("═");
+                }
+                println!("╝");
             };
 
             // Вычисляем шаг для зигзага (примерно 1/8 высоты окна)
