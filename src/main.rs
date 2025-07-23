@@ -1,25 +1,23 @@
-use rand::Rng;
-use std::f64::consts::PI;
 use opencv::{
-    core::{self, AlgorithmHint, Mat, Point, Rect, Scalar, Size, Vector},
+    Result as OpenCVResult,
+    core::{self, AlgorithmHint, Mat, Point, Rect, Scalar, Size, in_range},
     imgcodecs::{self, IMREAD_COLOR},
     imgproc::{
-        self, cvt_color, resize, threshold, LineTypes, COLOR_BGR2GRAY, FILLED, INTER_AREA, INTER_LINEAR, THRESH_BINARY, TM_CCOEFF_NORMED
+        self, COLOR_BGR2GRAY, FILLED, INTER_AREA, LineTypes, THRESH_BINARY, TM_CCOEFF_NORMED,
+        cvt_color, resize, threshold,
     },
     prelude::*,
-    Result as OpenCVResult,
 };
+use rand::Rng;
 use rayon::prelude::*;
-use std::{collections::HashMap, sync::Arc, time::Instant};
 use serde::{Deserialize, Serialize};
-use std::{
-    error::Error,
-    fmt,
-    fs,
-    process::Command,
-    time::Duration,
-    thread,
-};
+use std::f64::consts::PI;
+use std::{error::Error, fmt, fs, process::Command, thread, time::Duration};
+use std::{sync::Arc, time::Instant};
+use std::io;
+use std::io::Write;
+use crossterm::{execute, terminal::*};
+use crossterm::cursor::MoveTo;
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Settings {
@@ -44,12 +42,18 @@ struct RandomOffsetSettings {
 #[derive(Debug, Deserialize, Serialize)]
 struct HumanLikeMovementSettings {
     enabled: bool,
-    max_deviation: f64,       // Максимальное отклонение от прямой линии (в пикселях)
-    speed_variation: f64,     // Вариация скорости (0.0 - 1.0)
-    curve_smoothness: usize,  // Количество промежуточных точек для кривой
-    min_pause_ms: u64,        // Минимальная пауза между движениями
-    max_pause_ms: u64,        // Максимальная пауза между движениями
-    base_speed: f64
+    max_deviation: f64,   // Максимальное отклонение от прямой линии (в пикселях)
+    speed_variation: f64, // Вариация скорости (0.0 - 1.0)
+    curve_smoothness: usize, // Количество промежуточных точек для кривой
+    min_pause_ms: u64,    // Минимальная пауза между движениями
+    max_pause_ms: u64,    // Максимальная пауза между движениями
+    base_speed: f64,
+    min_down_ms: u64,
+    max_down_ms: u64,
+    min_up_ms: u64,
+    max_up_ms: u64,
+    min_move_delay_ms: u64,
+    max_move_delay_ms: u64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -61,6 +65,7 @@ struct TemplateSettings {
     red: f32,
     green: f32,
     blue: f32,
+    resolution: Option<f64>,
 }
 
 #[derive(Debug)]
@@ -144,14 +149,45 @@ struct ObjectTemplate {
     red: f32,
     green: f32,
     blue: f32,
+    resolution: Option<f64>,
 }
 
 impl ObjectTemplate {
-    fn new(name: &str, template_path: &str, threshold: f64, min_distance: f32, red: f32, green: f32, blue: f32) -> OpenCVResult<Self> {
-        let template = imgcodecs::imread(template_path, IMREAD_COLOR)?;
+    fn new(
+        name: &str,
+        template_path: &str,
+        threshold: f64,
+        min_distance: f32,
+        red: f32,
+        green: f32,
+        blue: f32,
+        resolution: Option<f64>,
+    ) -> OpenCVResult<Self> {
+        let mut template = imgcodecs::imread(template_path, IMREAD_COLOR)?;
+
+        // Удаляем цвет (154, 195, 161) из шаблона
+        let color_to_remove = Scalar::new(161.0, 195.0, 154.0, 0.0);
+        let mut mask = Mat::default();
+        in_range(
+            &template,
+            &Scalar::new(150.0, 190.0, 150.0, 0.0), // Нижняя граница с небольшим запасом
+            &Scalar::new(158.0, 200.0, 158.0, 0.0), // Верхняя граница с небольшим запасом
+            &mut mask,
+        )?;
+
+        // Заменяем цвет на прозрачный (черный)
+        let black = Scalar::all(0.0);
+        template.set_to(&black, &mask)?;
+
         let mut gray_template = Mat::default();
-        cvt_color(&template, &mut gray_template, COLOR_BGR2GRAY, 0, AlgorithmHint::ALGO_HINT_DEFAULT)?;
-        
+        cvt_color(
+            &template,
+            &mut gray_template,
+            COLOR_BGR2GRAY,
+            0,
+            AlgorithmHint::ALGO_HINT_DEFAULT,
+        )?;
+
         Ok(Self {
             name: name.to_string(),
             template,
@@ -161,6 +197,7 @@ impl ObjectTemplate {
             red,
             green,
             blue,
+            resolution,
         })
     }
 }
@@ -180,7 +217,7 @@ struct ObjectDetector {
 
 impl ObjectDetector {
     fn new(base_scale_factor: f64, reference_width: i32, reference_height: i32) -> Self {
-        Self { 
+        Self {
             templates: Vec::new(),
             base_scale_factor,
             reference_size: Size::new(reference_width, reference_height),
@@ -193,19 +230,48 @@ impl ObjectDetector {
         (width_scale + height_scale) / 2.0
     }
 
-    fn add_template(&mut self, name: &str, template_path: &str, threshold: f64, min_distance: f32, red: f32, green: f32, blue: f32) -> OpenCVResult<()> {
-        let template = ObjectTemplate::new(name, template_path, threshold, min_distance, red, green, blue)?;
+    fn add_template(
+        &mut self,
+        name: &str,
+        template_path: &str,
+        threshold: f64,
+        min_distance: f32,
+        red: f32,
+        green: f32,
+        blue: f32,
+        resolution: Option<f64>,
+    ) -> OpenCVResult<()> {
+        let template = ObjectTemplate::new(
+            name,
+            template_path,
+            threshold,
+            min_distance,
+            red,
+            green,
+            blue,
+            resolution,
+        )?;
         self.templates.push(Arc::new(template));
         Ok(())
     }
 
-    fn detect_objects_optimized(&mut self, image: &Mat, convert_to_grayscale: bool) -> OpenCVResult<Vec<DetectionResult>> {
+    fn detect_objects_optimized(
+        &mut self,
+        image: &Mat,
+        convert_to_grayscale: bool,
+    ) -> OpenCVResult<Vec<DetectionResult>> {
         let start_time = Instant::now();
-        
+
         // Подготовка изображения
         let working_image = if convert_to_grayscale {
             let mut gray = Mat::default();
-            cvt_color(image, &mut gray, COLOR_BGR2GRAY, 0, AlgorithmHint::ALGO_HINT_DEFAULT)?;
+            cvt_color(
+                image,
+                &mut gray,
+                COLOR_BGR2GRAY,
+                0,
+                AlgorithmHint::ALGO_HINT_DEFAULT,
+            )?;
             gray
         } else {
             image.clone()
@@ -223,7 +289,8 @@ impl ObjectDetector {
         )?;
 
         // Параллельное сопоставление шаблонов
-        let all_results: Vec<Vec<DetectionResult>> = self.templates
+        let all_results: Vec<Vec<DetectionResult>> = self
+            .templates
             .par_iter()
             .map(|template| {
                 let template_image = if convert_to_grayscale {
@@ -234,14 +301,17 @@ impl ObjectDetector {
 
                 // Масштабирование шаблона
                 let mut scaled_template = Mat::default();
+                let scale_factor = template.resolution.unwrap_or(self.base_scale_factor);
                 if resize(
                     template_image,
                     &mut scaled_template,
                     Size::new(0, 0),
-                    self.base_scale_factor,
-                    self.base_scale_factor,
+                    scale_factor,
+                    scale_factor,
                     INTER_AREA,
-                ).is_err() {
+                )
+                .is_err()
+                {
                     return Vec::new();
                 }
 
@@ -252,7 +322,9 @@ impl ObjectDetector {
                     &mut result_mat,
                     TM_CCOEFF_NORMED,
                     &Mat::default(),
-                ).is_err() {
+                )
+                .is_err()
+                {
                     return Vec::new();
                 }
 
@@ -263,19 +335,24 @@ impl ObjectDetector {
                     template.threshold,
                     1.0,
                     THRESH_BINARY,
-                ).is_err() {
+                )
+                .is_err()
+                {
                     return Vec::new();
                 }
 
                 let mut mask_8u = Mat::default();
-                if thresholded.convert_to(&mut mask_8u, core::CV_8U, 255.0, 0.0).is_err() {
+                if thresholded
+                    .convert_to(&mut mask_8u, core::CV_8U, 255.0, 0.0)
+                    .is_err()
+                {
                     return Vec::new();
                 }
 
                 let mut local_results = Vec::new();
                 let mut max_val = f64::MIN;
                 let mut max_loc = Point::default();
-                
+
                 loop {
                     if core::min_max_loc(
                         &result_mat,
@@ -284,14 +361,16 @@ impl ObjectDetector {
                         None,
                         Some(&mut max_loc),
                         &mask_8u,
-                    ).is_err() {
+                    )
+                    .is_err()
+                    {
                         break;
                     }
-                    
+
                     if max_val < template.threshold {
                         break;
                     }
-                    
+
                     local_results.push(DetectionResult {
                         object_name: template.name.clone(),
                         location: Point::new(
@@ -332,48 +411,61 @@ impl ObjectDetector {
 
                     max_val = f64::MIN;
                 }
-                
+
                 local_results
             })
             .collect();
+        let elapsed = start_time.elapsed();
+        let elapsed_ms = elapsed.as_millis();
+        // Очищаем терминал и выводим информацию
+    print!("\x1B[2J\x1B[3J\x1B[HОбнаружено за: {} мс\n", elapsed_ms);
+    io::stdout().flush().map_err(|e| {
+        opencv::Error::new(
+            opencv::core::StsError,
+            format!("Failed to flush stdout: {}", e),
+        )
+    })?;
 
-        println!("Optimized detection took: {:?}", start_time.elapsed());
-        
         Ok(self.filter_close_detections(all_results.into_iter().flatten().collect()))
     }
 
     fn filter_close_detections(&self, mut results: Vec<DetectionResult>) -> Vec<DetectionResult> {
         results.sort_by(|a, b| b.confidence.partial_cmp(&a.confidence).unwrap());
-        
+
         let mut filtered = Vec::new();
         let mut occupied = Vec::new();
-        
+
         for result in results {
             let too_close = occupied.iter().any(|(center, min_dist): &(Point, f32)| {
                 let dx = (center.x - result.location.x) as f32;
                 let dy = (center.y - result.location.y) as f32;
                 (dx * dx + dy * dy).sqrt() < *min_dist
             });
-            
+
             if !too_close {
-                if let Some(template) = self.templates.iter().find(|t| t.name == result.object_name) {
+                if let Some(template) = self.templates.iter().find(|t| t.name == result.object_name)
+                {
                     occupied.push((result.location, template.min_distance));
                     filtered.push(result);
                 }
             }
         }
-        
+
         filtered
     }
 
     fn draw_detections(&self, image: &mut Mat, detections: &[DetectionResult]) -> OpenCVResult<()> {
         for detection in detections {
-            if let Some(template) = self.templates.iter().find(|t| t.name == detection.object_name) {
+            if let Some(template) = self
+                .templates
+                .iter()
+                .find(|t| t.name == detection.object_name)
+            {
                 let color = Scalar::new(
                     template.blue.into(),
                     template.green.into(),
                     template.red.into(),
-                    0.0
+                    0.0,
                 );
 
                 imgproc::rectangle(
@@ -411,24 +503,26 @@ fn capture_window_by_title(window_title: &str, output: &str) -> AppResult<(i32, 
     let geometry = Command::new("xwininfo")
         .args(&["-name", window_title])
         .output()?;
-    
+
     if !geometry.status.success() {
-        return Err(AppError::WindowNotFound(
-            format!("Window '{}' not found", window_title)
-        ));
+        return Err(AppError::WindowNotFound(format!(
+            "Window '{}' not found",
+            window_title
+        )));
     }
 
     let geometry_output = String::from_utf8(geometry.stdout)?;
-    
+
     let parse_value = |s: &str| -> AppResult<i32> {
-        geometry_output.lines()
+        geometry_output
+            .lines()
             .find(|l| l.trim().starts_with(s))
             .and_then(|l| l.split(':').nth(1))
             .and_then(|v| v.trim().split(' ').next())
             .and_then(|v| v.parse().ok())
-            .ok_or_else(|| AppError::WindowNotFound(
-                format!("Could not parse {} from xwininfo output", s)
-            ))
+            .ok_or_else(|| {
+                AppError::WindowNotFound(format!("Could not parse {} from xwininfo output", s))
+            })
     };
 
     let x = parse_value("Absolute upper-left X")?;
@@ -446,50 +540,49 @@ fn capture_window_by_title(window_title: &str, output: &str) -> AppResult<(i32, 
     if !status.success() {
         let status_import = Command::new("import")
             .args(&[
-                "-window", 
+                "-window",
                 &format!("0x{:x}", parse_window_id(&geometry_output)?),
-                &output_file
+                &output_file,
             ])
             .status();
-        
+
         if status_import.is_err() || !status_import.unwrap().success() {
-            return Err(AppError::ScrotFailed(
-                format!("Failed to capture window area with both maim and import")
-            ));
+            return Err(AppError::ScrotFailed(format!(
+                "Failed to capture window area with both maim and import"
+            )));
         }
     }
 
     if !std::path::Path::new(&output_file).exists() {
-        return Err(AppError::ScrotFailed(
-            "Output file not created".to_string()
-        ));
+        return Err(AppError::ScrotFailed("Output file not created".to_string()));
     }
 
     Ok((x, y))
 }
 
 fn parse_window_id(geometry_output: &str) -> AppResult<u32> {
-    geometry_output.lines()
+    geometry_output
+        .lines()
         .find(|l| l.contains("Window id:"))
         .and_then(|l| l.split_whitespace().nth(3))
-        .and_then(|id| if id.starts_with("0x") {
-            u32::from_str_radix(&id[2..], 16).ok()
-        } else {
-            id.parse().ok()
+        .and_then(|id| {
+            if id.starts_with("0x") {
+                u32::from_str_radix(&id[2..], 16).ok()
+            } else {
+                id.parse().ok()
+            }
         })
-        .ok_or_else(|| AppError::WindowNotFound(
-            "Could not parse window ID".to_string()
-        ))
+        .ok_or_else(|| AppError::WindowNotFound("Could not parse window ID".to_string()))
 }
 
 fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
     let settings_path = "settings.json";
-    
+
     if let Ok(settings_content) = fs::read_to_string(settings_path) {
         serde_json::from_str(&settings_content).map_err(Into::into)
     } else {
         let (width, height) = get_window_size(window_title)?;
-        
+
         let settings = Settings {
             window_title: window_title.to_string(),
             resolution: 0.38,
@@ -502,21 +595,28 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
                 max_x_offset: 5,
                 max_y_offset: 5,
             },
-            human_like_movement: HumanLikeMovementSettings { // Добавлено
+            human_like_movement: HumanLikeMovementSettings {
+                // Добавлено
                 enabled: true,
                 max_deviation: 10.0,
                 speed_variation: 0.3,
                 curve_smoothness: 5,
                 min_pause_ms: 10,
                 max_pause_ms: 50,
-                base_speed: 0.1
+                base_speed: 0.1,
+                min_down_ms: 2,
+                max_down_ms: 5,
+                min_up_ms: 2,
+                max_up_ms: 6,
+                min_move_delay_ms: 5,
+                max_move_delay_ms: 12,
             },
             templates: Vec::new(),
         };
-        
+
         let serialized = serde_json::to_string_pretty(&settings)?;
         fs::write(settings_path, serialized)?;
-        
+
         Ok(settings)
     }
 }
@@ -525,34 +625,72 @@ fn get_window_size(window_title: &str) -> AppResult<(i32, i32)> {
     let output = Command::new("xwininfo")
         .args(&["-name", window_title])
         .output()?;
-    
+
     if !output.status.success() {
-        return Err(AppError::WindowNotFound(
-            format!("Window '{}' not found", window_title)
-        ));
+        return Err(AppError::WindowNotFound(format!(
+            "Window '{}' not found",
+            window_title
+        )));
     }
 
     let output_str = String::from_utf8(output.stdout)?;
-    
-    let width = output_str.lines()
+
+    let width = output_str
+        .lines()
         .find(|l| l.trim().starts_with("Width"))
         .and_then(|l| l.split(':').nth(1))
         .and_then(|v| v.trim().split(' ').next())
         .and_then(|v| v.parse().ok())
-        .ok_or_else(|| AppError::WindowNotFound(
-            "Could not parse width".to_string()
-        ))?;
+        .ok_or_else(|| AppError::WindowNotFound("Could not parse width".to_string()))?;
 
-    let height = output_str.lines()
+    let height = output_str
+        .lines()
         .find(|l| l.trim().starts_with("Height"))
         .and_then(|l| l.split(':').nth(1))
         .and_then(|v| v.trim().split(' ').next())
         .and_then(|v| v.parse().ok())
-        .ok_or_else(|| AppError::WindowNotFound(
-            "Could not parse height".to_string()
-        ))?;
+        .ok_or_else(|| AppError::WindowNotFound("Could not parse height".to_string()))?;
 
     Ok((width, height))
+}
+
+fn is_window_visible(window_title: &str) -> AppResult<bool> {
+    // Используем xwininfo для проверки состояния окна
+    let output = Command::new("xwininfo")
+        .args(&["-name", window_title])
+        .output()?;
+
+    if !output.status.success() {
+        return Err(AppError::WindowNotFound(format!(
+            "Window '{}' not found",
+            window_title
+        )));
+    }
+
+    let output_str = String::from_utf8(output.stdout)?;
+    if output_str.contains("window state: Iconic") {
+        return Err(AppError::WindowNotFound(format!(
+            "Window '{}' is minimized",
+            window_title
+        )));
+    }
+
+    // Проверяем, есть ли строка "Map State: IsViewable"
+    let is_visible = output_str
+        .lines()
+        .any(|l| l.trim().contains("Map State: IsViewable"));
+
+    Ok(is_visible)
+}
+
+fn check_window_visibility(window_title: &str) -> AppResult<()> {
+    if !is_window_visible(window_title)? {
+        return Err(AppError::WindowNotFound(format!(
+            "Window '{}' is obscured or minimized",
+            window_title
+        )));
+    }
+    Ok(())
 }
 
 // Функция для генерации кривой Безье с человеческими характеристиками
@@ -580,24 +718,21 @@ fn generate_human_like_path(
 
     // Количество промежуточных точек
     let num_points = settings.curve_smoothness.max(2);
-    
+
     // Генерируем небольшие отклонения
     for i in 1..num_points {
         let t = i as f64 / num_points as f64;
-        
+
         // Базовое линейное перемещение
         let x = start.0 as f64 + dx as f64 * t;
         let y = start.1 as f64 + dy as f64 * t;
-        
+
         // Добавляем случайное отклонение
         let deviation_scale = (t * PI).sin().abs() * settings.max_deviation;
         let dev_x = rng.gen_range(-deviation_scale..deviation_scale);
         let dev_y = rng.gen_range(-deviation_scale..deviation_scale);
-        
-        path.push((
-            (x + dev_x).round() as i32,
-            (y + dev_y).round() as i32,
-        ));
+
+        path.push(((x + dev_x).round() as i32, (y + dev_y).round() as i32));
     }
 
     // Добавляем конечную точку
@@ -607,11 +742,7 @@ fn generate_human_like_path(
 }
 
 // Модифицированная функция перемещения
-fn human_like_move(
-    x: i32,
-    y: i32,
-    settings: &HumanLikeMovementSettings,
-) -> AppResult<()> {
+fn human_like_move(x: i32, y: i32, settings: &HumanLikeMovementSettings) -> AppResult<()> {
     let mut rng = rand::thread_rng();
 
     if !settings.enabled {
@@ -625,11 +756,11 @@ fn human_like_move(
     let output = Command::new("xdotool")
         .args(&["getmouselocation", "--shell"])
         .output()?;
-    
+
     let output_str = String::from_utf8(output.stdout)?;
     let mut current_x = 0;
     let mut current_y = 0;
-    
+
     for line in output_str.lines() {
         if line.starts_with("X=") {
             current_x = line[2..].parse().unwrap_or(0);
@@ -639,146 +770,47 @@ fn human_like_move(
     }
 
     // Генерируем путь
-    let path = generate_human_like_path(
-        (current_x, current_y),
-        (x, y),
-        settings,
-    );
+    let path = generate_human_like_path((current_x, current_y), (x, y), settings);
 
     // Двигаемся по пути с переменной скоростью
     for i in 0..path.len() - 1 {
         let (from_x, from_y) = path[i];
         let (to_x, to_y) = path[i + 1];
-        
+
         // Вычисляем расстояние между точками
         let dx = to_x - from_x;
         let dy = to_y - from_y;
         let distance = ((dx * dx + dy * dy) as f64).sqrt();
-        
+
         // Базовое время движения (миллисекунды на пиксель)
         let base_speed = 0.1 + rng.gen_range(-settings.speed_variation..settings.speed_variation);
         let move_time = (distance * base_speed).max(1.0) as u64;
-        
+
         // Плавное перемещение между точками
         Command::new("xdotool")
-            .args(&[
-                "mousemove_relative",
-                "--",
-                &dx.to_string(),
-                &dy.to_string(),
-            ])
+            .args(&["mousemove_relative", "--", &dx.to_string(), &dy.to_string()])
             .status()?;
-        
+
         // Случайная пауза для имитации человеческой реакции
         if i < path.len() - 2 {
             let pause_time = rng.gen_range(settings.min_pause_ms..settings.max_pause_ms);
             thread::sleep(Duration::from_millis(pause_time));
         }
-        
+
         thread::sleep(Duration::from_millis(move_time));
     }
 
     Ok(())
 }
 
-// Обновленная функция click_and_drag_with_xdotool
-fn click_and_drag_with_xdotool(
-    window_x: i32,
-    window_y: i32,
-    from: (i32, i32),
-    from_size: (i32, i32),
-    to: (i32, i32),
-    to_size: (i32, i32),
-    settings: &Settings,
-) -> AppResult<()> {
-    let mut rng = rand::thread_rng();
-
-    // Получаем текущую позицию курсора
-    let original_pos = Command::new("xdotool")
-        .args(&["getmouselocation", "--shell"])
-        .output()?;
-    
-    let original_pos = String::from_utf8(original_pos.stdout)?;
-    let mut x = 0;
-    let mut y = 0;
-    
-    for line in original_pos.lines() {
-        if line.starts_with("X=") {
-            x = line[2..].parse().unwrap_or(0);
-        } else if line.starts_with("Y=") {
-            y = line[2..].parse().unwrap_or(0);
-        }
-    }
-
-    // Вычисляем целевые позиции с учетом случайного смещения
-    let (from_offset_x, from_offset_y) = if settings.random_offset.enabled {
-        (
-            rng.gen_range(-settings.random_offset.max_x_offset..=settings.random_offset.max_x_offset),
-            rng.gen_range(-settings.random_offset.max_y_offset..=settings.random_offset.max_y_offset),
-        )
-    } else {
-        (0, 0)
-    };
-
-    let (to_offset_x, to_offset_y) = if settings.random_offset.enabled {
-        (
-            rng.gen_range(-settings.random_offset.max_x_offset..=settings.random_offset.max_x_offset),
-            rng.gen_range(-settings.random_offset.max_y_offset..=settings.random_offset.max_y_offset),
-        )
-    } else {
-        (0, 0)
-    };
-
-    let abs_from_x = window_x + from.0 + from_size.0 / 2 + from_offset_x;
-    let abs_from_y = window_y + from.1 + from_size.1 / 2 + from_offset_y;
-    
-    let abs_to_x = window_x + to.0 + to_size.0 / 2 + to_offset_x;
-    let abs_to_y = window_y + to.1 + to_size.1 / 2 + to_offset_y;
-
-    // Перемещаемся к начальной точке с человеческим паттерном
-    human_like_move(abs_from_x, abs_from_y, &settings.human_like_movement)?;
-    
-    // Небольшая пауза перед кликом
-    thread::sleep(Duration::from_millis(rng.gen_range(2..8)));
-
-    // Нажимаем кнопку мыши
-    Command::new("xdotool")
-        .args(&["mousedown", "1"])
-        .status()?;
-    
-    // Небольшая пауза перед началом перемещения
-    thread::sleep(Duration::from_millis(rng.gen_range(2..8)));
-
-    // Перемещаемся к конечной точке с человеческим паттерном
-    human_like_move(abs_to_x, abs_to_y, &settings.human_like_movement)?;
-
-    // Небольшая пауза перед отпусканием
-    thread::sleep(Duration::from_millis(rng.gen_range(2..8)));
-    
-    // Отпускаем кнопку мыши
-    Command::new("xdotool")
-        .args(&["mouseup", "1"])
-        .status()?;
-    
-    // Возвращаем курсор на исходную позицию
-    human_like_move(x, y, &settings.human_like_movement)?;
-
-    Ok(())
-}
-
-fn group_detections_by_name(detections: Vec<DetectionResult>) -> HashMap<String, Vec<DetectionResult>> {
-    let mut groups = HashMap::new();
-    for detection in detections {
-        groups.entry(detection.object_name.clone())
-            .or_insert_with(Vec::new)
-            .push(detection);
-    }
-    groups
-}
-
-fn display_results_as_table(detections: &[DetectionResult], cols: usize, rows: usize) {
+fn display_results_as_table(
+    detections: &[DetectionResult],
+    cols: usize,
+    rows: usize,
+    templates: &[Arc<ObjectTemplate>],
+) {
     if detections.is_empty() {
-        println!("No objects detected");
+        print!("No objects detected\n");
         return;
     }
 
@@ -792,99 +824,126 @@ fn display_results_as_table(detections: &[DetectionResult], cols: usize, rows: u
     let cell_width = (max_x - min_x) as f32 / (cols - 1) as f32;
     let cell_height = (max_y - min_y) as f32 / (rows - 1) as f32;
 
-    // Создаем таблицу
-    let mut table: Vec<Vec<Option<(u32)>>> = vec![vec![None; cols]; rows];
+    // Создаем таблицу с дополнительной информацией о цвете
+    let mut table: Vec<Vec<Option<(u32, (f32, f32, f32))>>> = vec![vec![None; cols]; rows];
 
     // Заполняем таблицу
     for detection in detections {
         let col = ((detection.location.x - min_x) as f32 / cell_width).round() as usize;
         let row = ((detection.location.y - min_y) as f32 / cell_height).round() as usize;
 
-       let number = detection.object_name
-                .chars()
-                .filter_map(|c| c.to_digit(10))
-                .fold(0, |acc, digit| acc * 10 + digit);
+        let number = detection
+            .object_name
+            .chars()
+            .filter_map(|c| c.to_digit(10))
+            .fold(0, |acc, digit| acc * 10 + digit);
 
         if row < rows && col < cols {
-            table[row][col] = Some(number);
+            if let Some(template) = templates.iter().find(|t| t.name == detection.object_name) {
+                table[row][col] = Some((number, (template.red, template.green, template.blue)));
+            }
         }
     }
 
-   let cell_width = 4; // Минимальная ширина для "0" и двузначных чисел
-
+    let cell_width = 4; // Минимальная ширина для "0" и двузначных чисел
     let line_length = cols * (cell_width + 2) + 1;
 
-    // Выводим таблицу
-    println!("Detection results ({}x{} grid):", cols, rows);
-    println!("{}", "-".repeat(line_length));
-    
+    // Выводим таблицу с цветами
+    print!("{}\n", "-".repeat(line_length));
+
     for row in table {
         print!("|");
         for cell in row {
             match cell {
-                Some((num)) => print!(" {:^3} |", num),
-                None => print!(" {:^3} |", "0"), // Заменяем None на "0"
+                Some((num, (r, g, b))) => {
+                    // Используем ANSI escape-коды для цветного вывода
+                    print!(" \x1b[38;2;{};{};{}m{:^3}\x1b[0m |", r, g, b, num);
+                }
+                None => print!(" \x1b[38;2;{};{};{}m{:^3}\x1b[0m |", 105, 105, 105, 0),
             }
         }
-        println!("\n{}", "-".repeat(line_length));
+        print!("\n{}\n", "-".repeat(line_length));
     }
 }
 
-fn check_and_suggest_window_size(window_title: &str, recommended_width: i32, recommended_height: i32) -> AppResult<()> {
+fn check_and_suggest_window_size(
+    window_title: &str,
+    recommended_width: i32,
+    recommended_height: i32,
+) -> AppResult<()> {
     let (current_width, current_height) = get_window_size(window_title)?;
-    
+
     // Define tolerance (5 pixels in each direction)
     const TOLERANCE: i32 = 5;
     let width_diff = (current_width - recommended_width).abs();
     let height_diff = (current_height - recommended_height).abs();
-    
+
     if width_diff > TOLERANCE || height_diff > TOLERANCE {
-        println!("Current window size: {}x{}", current_width, current_height);
-        println!("Recommended window size: {}x{} (with ±{}px tolerance)", 
-                recommended_width, recommended_height, TOLERANCE);
-        
+        print!("Current window size: {}x{}\n", current_width, current_height);
+        print!(
+            "Recommended window size: {}x{} (with ±{}px tolerance)\n",
+            recommended_width, recommended_height, TOLERANCE
+        );
+
         // Show exact difference information
         if width_diff > TOLERANCE {
-            println!("Width difference: {}px (tolerance: {}px)", width_diff, TOLERANCE);
+            print!(
+                "Width difference: {}px (tolerance: {}px)\n",
+                width_diff, TOLERANCE
+            );
         }
         if height_diff > TOLERANCE {
-            println!("Height difference: {}px (tolerance: {}px)", height_diff, TOLERANCE);
+            print!(
+                "Height difference: {}px (tolerance: {}px)\n",
+                height_diff, TOLERANCE
+            );
         }
-        
-        println!("Would you like to resize the window to the recommended size? (y/n)");
-        
+
+        print!("Would you like to resize the window to the recommended size? (y/n)\n");
+
         let mut input = String::new();
         std::io::stdin().read_line(&mut input)?;
-        
+
         if input.trim().to_lowercase() == "y" {
             Command::new("wmctrl")
                 .args(&[
-                    "-r", window_title,
-                    "-e", &format!("0,-1,-1,{},{}", recommended_width, recommended_height)
+                    "-r",
+                    window_title,
+                    "-e",
+                    &format!("0,-1,-1,{},{}", recommended_width, recommended_height),
                 ])
                 .status()?;
-            println!("Window size changed to {}x{}. Please restart the program.", 
-                   recommended_width, recommended_height);
+            print!(
+                "Window size changed to {}x{}. Please restart the program.\n",
+                recommended_width, recommended_height
+            );
             std::process::exit(0);
         } else {
-            println!("Continuing with current window size. Detection results may be less accurate.");
+            print!(
+                "Continuing with current window size. Detection results may be less accurate.\n"
+            );
         }
     }
-    
+
     Ok(())
 }
 
 use std::env;
 
-fn is_cursor_in_window(window_x: i32, window_y: i32, window_width: i32, window_height: i32) -> AppResult<bool> {
+fn is_cursor_in_window(
+    window_x: i32,
+    window_y: i32,
+    window_width: i32,
+    window_height: i32,
+) -> AppResult<bool> {
     let output = Command::new("xdotool")
         .args(&["getmouselocation", "--shell"])
         .output()?;
-    
+
     let output_str = String::from_utf8(output.stdout)?;
     let mut cursor_x = 0;
     let mut cursor_y = 0;
-    
+
     for line in output_str.lines() {
         if line.starts_with("X=") {
             cursor_x = line[2..].parse().unwrap_or(0);
@@ -893,10 +952,10 @@ fn is_cursor_in_window(window_x: i32, window_y: i32, window_width: i32, window_h
         }
     }
 
-    Ok(cursor_x >= window_x && 
-       cursor_x <= window_x + window_width && 
-       cursor_y >= window_y && 
-       cursor_y <= window_y + window_height)
+    Ok(cursor_x >= window_x
+        && cursor_x <= window_x + window_width
+        && cursor_y >= window_y
+        && cursor_y <= window_y + window_height)
 }
 
 fn process_barrels(
@@ -909,16 +968,16 @@ fn process_barrels(
     settings: &Settings,
 ) -> AppResult<(Vec<DetectionResult>, (i32, i32))> {
     let mut rng = rand::thread_rng();
-    
+
     // Получаем текущую позицию курсора только один раз в начале
     let original_pos = Command::new("xdotool")
         .args(&["getmouselocation", "--shell"])
         .output()?;
-    
+
     let original_pos = String::from_utf8(original_pos.stdout)?;
     let mut original_x = 0;
     let mut original_y = 0;
-    
+
     for line in original_pos.lines() {
         if line.starts_with("X=") {
             original_x = line[2..].parse().unwrap_or(0);
@@ -930,17 +989,26 @@ fn process_barrels(
     let mut merged = true;
     while merged {
         merged = false;
-        
+
         let mut merges: Vec<(usize, usize, u32)> = Vec::new();
-        
+
         for i in 0..barrels.len() {
-            for j in (i+1)..barrels.len() {
+            for j in (i + 1)..barrels.len() {
                 if barrels[i].object_name == barrels[j].object_name {
-                    let current_level: u32 = barrels[i].object_name.split_whitespace().last()
-                        .unwrap_or("0").parse().unwrap_or(0);
+                    let current_level: u32 = barrels[i]
+                        .object_name
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0);
                     let next_level = current_level + 1;
-                    
-                    if detector.templates.iter().any(|t| t.name == format!("Barrel {}", next_level)) {
+
+                    if detector
+                        .templates
+                        .iter()
+                        .any(|t| t.name == format!("Barrel {}", next_level))
+                    {
                         merges.push((i, j, next_level));
                         break;
                     }
@@ -951,23 +1019,31 @@ fn process_barrels(
         if let Some((i, j, next_level)) = merges.first() {
             let from = &barrels[*i];
             let to = &barrels[*j];
-            
-            let from_template = detector.templates.iter()
+
+            let from_template = detector
+                .templates
+                .iter()
                 .find(|t| t.name == from.object_name)
                 .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-            
-            let to_template = detector.templates.iter()
+
+            let to_template = detector
+                .templates
+                .iter()
                 .find(|t| t.name == to.object_name)
                 .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-            
+
             let from_size = (from_template.template.cols(), from_template.template.rows());
             let to_size = (to_template.template.cols(), to_template.template.rows());
-            
+
             // Вычисляем целевые позиции с учетом случайного смещения
             let (from_offset_x, from_offset_y) = if settings.random_offset.enabled {
                 (
-                    rng.gen_range(-settings.random_offset.max_x_offset..=settings.random_offset.max_x_offset),
-                    rng.gen_range(-settings.random_offset.max_y_offset..=settings.random_offset.max_y_offset),
+                    rng.gen_range(
+                        -settings.random_offset.max_x_offset..=settings.random_offset.max_x_offset,
+                    ),
+                    rng.gen_range(
+                        -settings.random_offset.max_y_offset..=settings.random_offset.max_y_offset,
+                    ),
                 )
             } else {
                 (0, 0)
@@ -975,8 +1051,12 @@ fn process_barrels(
 
             let (to_offset_x, to_offset_y) = if settings.random_offset.enabled {
                 (
-                    rng.gen_range(-settings.random_offset.max_x_offset..=settings.random_offset.max_x_offset),
-                    rng.gen_range(-settings.random_offset.max_y_offset..=settings.random_offset.max_y_offset),
+                    rng.gen_range(
+                        -settings.random_offset.max_x_offset..=settings.random_offset.max_x_offset,
+                    ),
+                    rng.gen_range(
+                        -settings.random_offset.max_y_offset..=settings.random_offset.max_y_offset,
+                    ),
                 )
             } else {
                 (0, 0)
@@ -984,34 +1064,51 @@ fn process_barrels(
 
             let abs_from_x = window_x + from.location.x + from_size.0 / 2 + from_offset_x;
             let abs_from_y = window_y + from.location.y + from_size.1 / 2 + from_offset_y;
-            
+
             let abs_to_x = window_x + to.location.x + to_size.0 / 2 + to_offset_x;
             let abs_to_y = window_y + to.location.y + to_size.1 / 2 + to_offset_y;
 
             // Перемещаемся к начальной точке
             human_like_move(abs_from_x, abs_from_y, &settings.human_like_movement)?;
-            
+
             // Небольшая пауза перед кликом
-            thread::sleep(Duration::from_millis(rng.gen_range(2..5)));
+            if settings.human_like_movement.enabled {
+                thread::sleep(Duration::from_millis(rng.gen_range(
+                    settings.human_like_movement.min_down_ms
+                        ..settings.human_like_movement.max_down_ms,
+                )));
+            } else {
+                thread::sleep(Duration::from_millis(rng.gen_range(2..5)));
+            }
 
             // Нажимаем кнопку мыши
-            Command::new("xdotool")
-                .args(&["mousedown", "1"])
-                .status()?;
-            
+            Command::new("xdotool").args(&["mousedown", "1"]).status()?;
+
             // Небольшая пауза перед началом перемещения
-            thread::sleep(Duration::from_millis(rng.gen_range(5..12)));
+            if settings.human_like_movement.enabled {
+                thread::sleep(Duration::from_millis(rng.gen_range(
+                    settings.human_like_movement.min_move_delay_ms
+                        ..settings.human_like_movement.max_move_delay_ms,
+                )));
+            } else {
+                thread::sleep(Duration::from_millis(rng.gen_range(5..12)));
+            }
 
             // Перемещаемся к конечной точке
             human_like_move(abs_to_x, abs_to_y, &settings.human_like_movement)?;
 
             // Небольшая пауза перед отпусканием
             thread::sleep(Duration::from_millis(rng.gen_range(6..12)));
-            
+            if settings.human_like_movement.enabled {
+                thread::sleep(Duration::from_millis(rng.gen_range(
+                    settings.human_like_movement.min_up_ms..settings.human_like_movement.max_up_ms,
+                )));
+            } else {
+                thread::sleep(Duration::from_millis(rng.gen_range(5..12)));
+            }
+
             // Отпускаем кнопку мыши
-            Command::new("xdotool")
-                .args(&["mouseup", "1"])
-                .status()?;
+            Command::new("xdotool").args(&["mouseup", "1"]).status()?;
 
             // Сохраняем позицию для новой бочки
             let new_location = to.location;
@@ -1020,21 +1117,20 @@ fn process_barrels(
             // Удаляем бочки (сначала бОльший индекс)
             barrels.remove(*j);
             barrels.remove(*i);
-            
+
             // Добавляем новую бочку
             barrels.push(DetectionResult {
                 object_name: format!("Barrel {}", next_level),
                 location: new_location,
-                confidence: conf
+                confidence: conf,
             });
-            
+
             merged = true;
         }
     }
 
     Ok((barrels, (original_x, original_y)))
 }
-
 
 fn main() -> AppResult<()> {
     let args: Vec<String> = env::args().collect();
@@ -1043,14 +1139,18 @@ fn main() -> AppResult<()> {
     let window_title = "M2006C3MNG";
     let settings = load_or_create_settings(window_title)?;
 
-    check_and_suggest_window_size(&settings.window_title, settings.reference_width, settings.reference_height)?;
-    
+    check_and_suggest_window_size(
+        &settings.window_title,
+        settings.reference_width,
+        settings.reference_height,
+    )?;
+
     let mut detector = ObjectDetector::new(
         settings.resolution,
         settings.reference_width,
-        settings.reference_height
+        settings.reference_height,
     );
-    
+
     for template_settings in &settings.templates {
         detector.add_template(
             &template_settings.name,
@@ -1059,99 +1159,129 @@ fn main() -> AppResult<()> {
             template_settings.min_distance,
             template_settings.red,
             template_settings.green,
-            template_settings.blue
+            template_settings.blue,
+            template_settings.resolution,
         )?;
     }
 
     loop {
+
         let screenshot_path = "screenshot.png";
-        let (window_x, window_y) = capture_window_by_title(&settings.window_title, screenshot_path)?;
+        let (window_x, window_y) =
+            capture_window_by_title(&settings.window_title, screenshot_path)?;
 
-        let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR)
-            .map_err(|e| AppError::ImageProcessing(format!("Failed to load screenshot: {}", e)))?;
-        
-        if image.empty() {
-            return Err(AppError::ImageProcessing("Loaded image is empty".to_string()));
-        }
+        match check_window_visibility(&settings.window_title) {
+            Ok(_) => {
+                let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR).map_err(|e| {
+                    AppError::ImageProcessing(format!("Failed to load screenshot: {}", e))
+                })?;
 
-        let detections = detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
-
-        let (window_width, window_height) = get_window_size(&settings.window_title)?;
-
-        let is_on_window = is_cursor_in_window(window_x, window_y, window_width, window_height)?;
-
-        display_results_as_table(&detections, 4, 5);
-
-        detector.draw_detections(&mut image, &detections)?;
-        imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
-        println!("Result saved to result.png");
-
-        let mut magnets: Vec<DetectionResult> = detections.clone().into_iter()
-            .filter(|d| d.object_name.starts_with("Magnet"))
-            .collect();
-
-        if magnets.len() > 0 {
-            for obj in magnets {
-                    let template = detector.templates.iter()
-                        .find(|t| t.name == obj.object_name)
-                        .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
-                    
-                    let size = (
-                        template.template.cols(),
-                        template.template.rows()
-                    );
-                    
-                    let abs_x = window_x + obj.location.x + size.0 / 2;
-                    let abs_y = window_y + obj.location.y + size.1 / 2;
-
-                    // Одиночный клик
-                    Command::new("xdotool")
-                        .args(&["mousemove", &abs_x.to_string(), &abs_y.to_string()])
-                        .status()?;
-                    thread::sleep(Duration::from_millis(5));
-
-                    Command::new("xdotool")
-                        .args(&["click", "1"])
-                        .status()?;
-                    thread::sleep(Duration::from_millis(5));
+                if image.empty() {
+                    return Err(AppError::ImageProcessing(
+                        "Loaded image is empty".to_string(),
+                    ));
                 }
-        }
-        else {
 
-        // Обработка бочек
-        let mut barrels: Vec<DetectionResult> = detections.into_iter()
-            .filter(|d| d.object_name.starts_with("Barrel"))
-            .collect();
+                let detections =
+                    detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
 
-        // Сортируем бочки по номеру (от меньшего к большему)
-        barrels.sort_by(|a, b| {
-            let num_a = a.object_name.split_whitespace().last().unwrap_or("0").parse().unwrap_or(0);
-            let num_b = b.object_name.split_whitespace().last().unwrap_or("0").parse().unwrap_or(0);
-            num_a.cmp(&num_b)
-        });
+                let (window_width, window_height) = get_window_size(&settings.window_title)?;
 
-        let (barrels, (original_x, original_y)) = process_barrels(
-            window_x,
-            window_y,
-            window_width,
-            window_height,
-            barrels,
-            &mut detector,
-            &settings,
-        )?;
+                let is_on_window =
+                    is_cursor_in_window(window_x, window_y, window_width, window_height)?;
+                display_results_as_table(&detections, 4, 5, &detector.templates);
 
-        if !is_on_window && settings.human_like_movement.enabled {
-            human_like_move(original_x, original_y, &settings.human_like_movement)?;
-        }
-        else if !&settings.human_like_movement.enabled {
-             human_like_move(original_x, original_y, &settings.human_like_movement)?;
-        }
-        if !infinite_mode {
-            break;
-        }
-        }
+                detector.draw_detections(&mut image, &detections)?;
+                imgcodecs::imwrite("result.png", &image, &core::Vector::new())?;
 
-        thread::sleep(Duration::from_millis(settings.rescan_delay));
+                // Обработка бочек
+                let mut barrels: Vec<DetectionResult> = detections
+                    .into_iter()
+                    .filter(|d| d.object_name.starts_with("Barrel"))
+                    .collect();
+
+                // Сортируем бочки по номеру (от меньшего к большему)
+                barrels.sort_by(|a, b| {
+                    let num_a = a
+                        .object_name
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0);
+                    let num_b = b
+                        .object_name
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0);
+                    num_a.cmp(&num_b)
+                });
+
+                let (barrels, (original_x, original_y)) = process_barrels(
+                    window_x,
+                    window_y,
+                    window_width,
+                    window_height,
+                    barrels,
+                    &mut detector,
+                    &settings,
+                )?;
+
+                let max_barrel_number = barrels.iter().fold(0, |max, barrel| {
+                    let current_num = barrel
+                        .object_name
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0);
+                    max.max(current_num)
+                });
+
+                if let Some(barrel) = barrels.iter().find(|b| {
+                    b.object_name
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or("0")
+                        .parse::<u32>()
+                        .unwrap_or(0)
+                        == max_barrel_number
+                }) {
+                    if let Some(template) = detector
+                        .templates
+                        .iter()
+                        .find(|t| t.name == barrel.object_name)
+                    {
+                        print!(
+                            "Наибольший номер бочки: \x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m\n",
+                            template.red, template.green, template.blue, max_barrel_number
+                        );
+                    } else {
+                        print!("Наибольший номер бочки: {}\n", max_barrel_number);
+                    }
+                } else {
+                    print!("Наибольший номер бочки: {}\n", max_barrel_number);
+                }
+
+                if !is_on_window && settings.human_like_movement.enabled {
+                    human_like_move(original_x, original_y, &settings.human_like_movement)?;
+                } else if !&settings.human_like_movement.enabled {
+                    human_like_move(original_x, original_y, &settings.human_like_movement)?;
+                }
+                if !infinite_mode {
+                    break;
+                }
+
+                thread::sleep(Duration::from_millis(settings.rescan_delay));
+            }
+            Err(e) => {
+                // Произошла ошибка при проверке
+                eprint!("Error checking window visibility: {}\n", e);
+                return Err(e);
+            }
+        }
     }
 
     Ok(())
