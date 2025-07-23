@@ -967,17 +967,15 @@ fn display_results_as_table(
     // Выводим таблицу с цветами
     print!("{}\n", "-".repeat(line_length));
 
-    for row in table {
+     for row in table {
         print!("|");
         for cell in row {
             match cell {
-                Some((num, (r, g, b))) => {
+                Some((num, (r, g, b))) if num != 0 => {
                     // Используем ANSI escape-коды для цветного текста и фона
-                    // Формат: \x1b[48;2;R;G;Bm - фон
-                    //         \x1b[38;2;R;G;Bm - текст (если нужно)
                     print!(" \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m |", r, g, b, num);
                 }
-                None => print!(" \x1b[48;2;105;105;105m{:^3}\x1b[0m |", 0),
+                _ => print!(" {:^3} |", ""), // Пустая ячейка для None или num == 0
             }
         }
         print!("\n{}\n", "-".repeat(line_length));
