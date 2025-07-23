@@ -284,25 +284,95 @@ fn display_results_as_table(
         }
     }
 
-    let cell_width = 4; // Минимальная ширина для "0" и двузначных чисел
-    let line_length = cols * (cell_width + 2) + 1;
+    // Фильтруем бочки и собираем в новый Vec
+    let barrels: Vec<DetectionResult> = detections
+        .iter()
+        .filter(|d| d.object_name.starts_with("Barrel"))
+        .cloned()
+        .collect();
 
-    // Выводим таблицу с цветами
-    print!("{} {}ms\n", "-".repeat(line_length), detection_time);
+    let (min_lvl, max_lvl, merges_remaining) = calculate_required_merges(&barrels);
 
-    for row in table {
-        print!("|");
-        for cell in row {
-            match cell {
-                Some((num, (r, g, b))) if num != 0 => {
-                    // Используем ANSI escape-коды для цветного текста и фона
-                    print!(" \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m |", r, g, b, num);
-                }
-                _ => print!(" {:^3} |", ""), // Пустая ячейка для None или num == 0
-            }
+    // Table drawing with fixed cell width
+    let cell_width = 5;
+    let empty_cell = format!(" {:^3} ", ""); // Centered empty cell
+
+    // Print table header
+    print!("╔");
+    for c in 0..cols {
+        print!("{}", "═".repeat(cell_width));
+        if c < cols - 1 {
+            print!("╦");
         }
-        print!("\n{}\n", "-".repeat(line_length));
     }
+    println!("╗");
+
+    // Print table rows
+    for row in 0..rows {
+        print!("║");
+        for col in 0..cols {
+            if let Some((num, (r, g, b))) = &table[row][col] {
+                if *num != 0 {
+                    print!(" \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ", r, g, b, num);
+                } else {
+                    print!("{}", empty_cell);
+                }
+            } else {
+                print!("{}", empty_cell);
+            }
+            print!("║");
+        }
+        println!();
+
+        // Print row separator if not last row
+        if row < rows - 1 {
+            print!("╠");
+            for c in 0..cols {
+                print!("{}", "═".repeat(cell_width));
+                if c < cols - 1 {
+                    print!("╬");
+                }
+            }
+            println!("╣");
+        }
+    }
+
+    // Print table footer
+    print!("╚");
+    for c in 0..cols {
+        print!("{}", "═".repeat(cell_width));
+        if c < cols - 1 {
+            print!("╩");
+        }
+    }
+    println!("╝ {}ms", detection_time);
+
+    // Statistics section
+let min_w = 6;  // Ширина колонки для минимального уровня
+let max_w = 6;  // Ширина колонки для максимального уровня
+let target_w = 6;  // Ширина колонки для целевого уровня
+let merges_w = 6;  // Ширина колонки для счетчика объединений
+
+println!("╔{}╦{}╦{}╦{}╗", 
+    "═".repeat(min_w + 2),  // +2 для учета пробелов
+    "═".repeat(max_w + 2),
+    "═".repeat(target_w + 2),
+    "═".repeat(merges_w + 2)
+);
+
+println!("║ {:<min_w$} ║ {:<max_w$} ║ {:<target_w$} ║ {:>merges_w$} ║",
+    format!("⭣{}", min_lvl),
+    format!("⭡{}", max_lvl),
+    format!("⭢{}", max_lvl + 1),
+    merges_remaining
+);
+
+println!("╚{}╩{}╩{}╩{}╝", 
+    "═".repeat(min_w + 2),
+    "═".repeat(max_w + 2),
+    "═".repeat(target_w + 2),
+    "═".repeat(merges_w + 2)
+);
 }
 
 fn check_and_suggest_window_size(
@@ -875,70 +945,6 @@ fn main() -> AppResult<()> {
 
             let (barrels, (original_x, original_y)) =
                 process_barrels(window_x, window_y, barrels, &mut detector, &settings)?;
-
-            let (min_lvl, max_lvl, merges_remaining) = calculate_required_merges(&barrels);
-
-            // Находим цвет для максимального уровня бочки
-            let min_level_color = detector
-                .templates
-                .iter()
-                .find(|t| {
-                    t.name
-                        .split_whitespace()
-                        .last()
-                        .and_then(|s| s.parse::<u32>().ok())
-                        == Some(min_lvl)
-                })
-                .map(|t| (t.red, t.green, t.blue))
-                .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
-
-            // Находим цвет для максимального уровня бочки
-            let max_level_color = detector
-                .templates
-                .iter()
-                .find(|t| {
-                    t.name
-                        .split_whitespace()
-                        .last()
-                        .and_then(|s| s.parse::<u32>().ok())
-                        == Some(max_lvl)
-                })
-                .map(|t| (t.red, t.green, t.blue))
-                .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
-
-            // Находим цвет для целевого уровня (max_lvl + 1)
-            let target_level_color = detector
-                .templates
-                .iter()
-                .find(|t| {
-                    t.name
-                        .split_whitespace()
-                        .last()
-                        .and_then(|s| s.parse::<u32>().ok())
-                        == Some(max_lvl + 1)
-                })
-                .map(|t| (t.red, t.green, t.blue))
-                .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
-
-            print!(
-                "| ⭣\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m ⭡\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m | ⭢\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m ⭤{}",
-                min_level_color.0,
-                min_level_color.1,
-                min_level_color.2,
-                min_lvl,
-                max_level_color.0,
-                max_level_color.1,
-                max_level_color.2,
-                max_lvl,
-                target_level_color.0,
-                target_level_color.1,
-                target_level_color.2,
-                max_lvl + 1,
-                merges_remaining
-            );
-            let cell_width = 4; // Минимальная ширина для "0" и двузначных чисел
-            let line_length = 4 * (cell_width + 2) + 1;
-            print!("\n{}\n", "-".repeat(line_length));
 
             if !is_on_window && settings.human_like_movement.enabled {
                 human_like_move(original_x, original_y, &settings.human_like_movement)?;
