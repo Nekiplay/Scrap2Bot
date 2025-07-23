@@ -18,6 +18,9 @@ use std::io;
 use std::io::Write;
 use std::{error::Error, fmt, fs, process::Command, thread, time::Duration};
 use std::{sync::Arc, time::Instant};
+use crossterm::{
+    terminal::{SetTitle},
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct Settings {
@@ -231,100 +234,100 @@ impl ObjectDetector {
     }
 
     fn update_active_range(&mut self, detected_numbers: &[u32]) {
-    if detected_numbers.is_empty() {
-        // If nothing is detected, use full range but ensure it's within bounds
-        self.active_range = (0, self.templates.len().saturating_sub(1));
-        self.full_range = true;
-        return;
-    }
+        if detected_numbers.is_empty() {
+            // If nothing is detected, use full range but ensure it's within bounds
+            self.active_range = (0, self.templates.len().saturating_sub(1));
+            self.full_range = true;
+            return;
+        }
 
-    // If was full range and something found - switch to targeted range
-    if self.full_range {
-        let min_detected = *detected_numbers.iter().min().unwrap();
-        let max_detected = *detected_numbers.iter().max().unwrap();
+        // If was full range and something found - switch to targeted range
+        if self.full_range {
+            let min_detected = *detected_numbers.iter().min().unwrap();
+            let max_detected = *detected_numbers.iter().max().unwrap();
 
-        // Define new range with buffer
-        let new_min = min_detected.saturating_sub(2); // +5 previous levels
-        let new_max = max_detected + 2; // +5 next levels
+            // Define new range with buffer
+            let new_min = min_detected.saturating_sub(5); // +5 previous levels
+            let new_max = max_detected + 5; // +5 next levels
 
-        // Find template indices for new range
-        let mut start = 0;
-        let mut end = self.templates.len().saturating_sub(1);
+            // Find template indices for new range
+            let mut start = 0;
+            let mut end = self.templates.len().saturating_sub(1);
 
-        for (i, template) in self.templates.iter().enumerate() {
-            if let Some(num) = template
-                .name
-                .split_whitespace()
-                .last()
-                .and_then(|s| s.parse::<u32>().ok())
-            {
-                if num >= new_min && num <= new_max {
-                    if i < start || start == 0 {
-                        start = i;
-                    }
-                    if i > end || end == self.templates.len().saturating_sub(1) {
-                        end = i;
+            for (i, template) in self.templates.iter().enumerate() {
+                if let Some(num) = template
+                    .name
+                    .split_whitespace()
+                    .last()
+                    .and_then(|s| s.parse::<u32>().ok())
+                {
+                    if num >= new_min && num <= new_max {
+                        if i < start || start == 0 {
+                            start = i;
+                        }
+                        if i > end || end == self.templates.len().saturating_sub(1) {
+                            end = i;
+                        }
                     }
                 }
             }
+
+            // Ensure the range is valid
+            self.active_range = (
+                start.min(self.templates.len().saturating_sub(1)),
+                end.min(self.templates.len().saturating_sub(1)),
+            );
+            self.full_range = false;
+        } else {
+            // If already in targeted range - adjust it smoothly
+            let min_detected = *detected_numbers.iter().min().unwrap();
+            let max_detected = *detected_numbers.iter().max().unwrap();
+
+            // Current bounds
+            let (current_start, current_end) = self.active_range;
+
+            // New bounds with buffer
+            let new_min = min_detected.saturating_sub(3) as usize;
+            let new_max = (max_detected + 3) as usize;
+
+            // Smooth range expansion
+            let new_start = if new_min < current_start {
+                new_min
+            } else {
+                current_start
+            };
+            let new_end = if new_max > current_end {
+                new_max
+            } else {
+                current_end
+            };
+
+            // Ensure the range is valid
+            self.active_range = (
+                new_start.min(self.templates.len().saturating_sub(1)),
+                new_end.min(self.templates.len().saturating_sub(1)),
+            );
         }
-
-        // Ensure the range is valid
-        self.active_range = (
-            start.min(self.templates.len().saturating_sub(1)),
-            end.min(self.templates.len().saturating_sub(1)),
-        );
-        self.full_range = false;
-    } else {
-        // If already in targeted range - adjust it smoothly
-        let min_detected = *detected_numbers.iter().min().unwrap();
-        let max_detected = *detected_numbers.iter().max().unwrap();
-
-        // Current bounds
-        let (current_start, current_end) = self.active_range;
-
-        // New bounds with buffer
-        let new_min = min_detected.saturating_sub(3) as usize;
-        let new_max = (max_detected + 3) as usize;
-
-        // Smooth range expansion
-        let new_start = if new_min < current_start {
-            new_min
-        } else {
-            current_start
-        };
-        let new_end = if new_max > current_end {
-            new_max
-        } else {
-            current_end
-        };
-
-        // Ensure the range is valid
-        self.active_range = (
-            new_start.min(self.templates.len().saturating_sub(1)),
-            new_end.min(self.templates.len().saturating_sub(1)),
-        );
     }
-}
 
     fn get_active_templates(&self) -> Vec<Arc<ObjectTemplate>> {
-    let mut result = Vec::new();
-    
-    // Всегда включаем шаблон Empty
-    if self.empty_template_index < self.templates.len() {
-        result.push(self.templates[self.empty_template_index].clone());
-    }
-    
-    // Добавляем шаблоны из активного диапазона (исключая Empty, если он уже добавлен)
-    let (start, end) = self.active_range;
-    for i in start..=end {
-        if i < self.templates.len() && i != self.empty_template_index {
-            result.push(self.templates[i].clone());
+        let mut result = Vec::new();
+
+        // Всегда включаем шаблон Empty
+        if self.empty_template_index < self.templates.len() {
+            result.push(self.templates[self.empty_template_index].clone());
         }
+
+        // Добавляем шаблоны из активного диапазона (исключая Empty, если он уже добавлен)
+        let (start, end) = self.active_range;
+        for i in start..=end {
+            if i < self.templates.len() && i != self.empty_template_index {
+                result.push(self.templates[i].clone());
+            }
+        }
+
+        result
     }
-    
-    result
-}
 
     fn add_template(
         &mut self,
@@ -518,7 +521,7 @@ impl ObjectDetector {
         let elapsed = start_time.elapsed();
         let elapsed_ms = elapsed.as_millis();
         // Очищаем терминал и выводим информацию
-        print!("\x1B[2J\x1B[3J\x1B[HОбнаружено за: {} мс\n", elapsed_ms);
+        print!("\x1B[2J\x1B[3J\x1B[HDetection: {}ms\n", elapsed_ms);
         io::stdout().flush().map_err(|e| {
             opencv::Error::new(
                 opencv::core::StsError,
@@ -969,10 +972,12 @@ fn display_results_as_table(
         for cell in row {
             match cell {
                 Some((num, (r, g, b))) => {
-                    // Используем ANSI escape-коды для цветного вывода
-                    print!(" \x1b[38;2;{};{};{}m{:^3}\x1b[0m |", r, g, b, num);
+                    // Используем ANSI escape-коды для цветного текста и фона
+                    // Формат: \x1b[48;2;R;G;Bm - фон
+                    //         \x1b[38;2;R;G;Bm - текст (если нужно)
+                    print!(" \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m |", r, g, b, num);
                 }
-                None => print!(" \x1b[38;2;{};{};{}m{:^3}\x1b[0m |", 105, 105, 105, 0),
+                None => print!(" \x1b[48;2;105;105;105m{:^3}\x1b[0m |", 0),
             }
         }
         print!("\n{}\n", "-".repeat(line_length));
@@ -1072,6 +1077,52 @@ fn is_cursor_in_window(
         && cursor_x <= window_x + window_width
         && cursor_y >= window_y
         && cursor_y <= window_y + window_height)
+}
+
+fn calculate_required_merges(barrels: &[DetectionResult]) -> (u32, u32, u32) {
+    // Собираем статистику по уровням бочек
+    let mut level_counts = std::collections::HashMap::new();
+    for barrel in barrels {
+        let level = barrel
+            .object_name
+            .split_whitespace()
+            .last()
+            .unwrap_or("0")
+            .parse()
+            .unwrap_or(0);
+        *level_counts.entry(level).or_insert(0) += 1;
+    }
+
+    let min_level = *level_counts.keys().min().unwrap_or(&0);
+    let max_level = *level_counts.keys().max().unwrap_or(&0);
+    let target_level = max_level + 1;
+
+    // Вычисляем сколько соединений нужно с учетом уже имеющихся бочек
+    let mut merges_needed = 0;
+    let mut needed = 2; // Для получения 1 бочки следующего уровня нужно 2 текущего
+
+    for level in (min_level..=max_level).rev() {
+        let available = *level_counts.get(&level).unwrap_or(&0);
+
+        if available >= needed {
+            // Хватает бочек этого уровня
+            merges_needed += needed / 2;
+            needed = 0;
+            break;
+        } else {
+            // Не хватает, считаем сколько нужно получить из более низких уровней
+            let missing = needed - available;
+            merges_needed += available / 2;
+            needed = missing * 2;
+        }
+    }
+
+    // Если все еще нужно бочки (не хватило даже минимальных)
+    if needed > 0 {
+        merges_needed += needed / 2;
+    }
+
+    (min_level, max_level, merges_needed)
 }
 
 fn process_barrels(
@@ -1251,6 +1302,7 @@ fn process_barrels(
 fn main() -> AppResult<()> {
     let args: Vec<String> = env::args().collect();
     let infinite_mode = args.iter().any(|arg| arg == "--infinite" || arg == "-i");
+    execute!(std::io::stdout(), SetTitle("Scrap II Bot"))?;
 
     let window_title = "M2006C3MNG";
     let settings = load_or_create_settings(window_title)?;
@@ -1354,6 +1406,18 @@ fn main() -> AppResult<()> {
                     &settings,
                 )?;
 
+                // В функции main после обнаружения бочек:
+                let min_barrel_number = barrels.iter().fold(u32::MAX, |min, barrel| {
+                    let current_num = barrel
+                        .object_name
+                        .split_whitespace()
+                        .last()
+                        .unwrap_or("0")
+                        .parse()
+                        .unwrap_or(0);
+                    min.min(current_num)
+                });
+
                 let max_barrel_number = barrels.iter().fold(0, |max, barrel| {
                     let current_num = barrel
                         .object_name
@@ -1365,30 +1429,71 @@ fn main() -> AppResult<()> {
                     max.max(current_num)
                 });
 
-                if let Some(barrel) = barrels.iter().find(|b| {
-                    b.object_name
-                        .split_whitespace()
-                        .last()
-                        .unwrap_or("0")
-                        .parse::<u32>()
-                        .unwrap_or(0)
-                        == max_barrel_number
-                }) {
-                    if let Some(template) = detector
-                        .templates
-                        .iter()
-                        .find(|t| t.name == barrel.object_name)
-                    {
-                        print!(
-                            "Наибольший номер бочки: \x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m\n",
-                            template.red, template.green, template.blue, max_barrel_number
-                        );
-                    } else {
-                        print!("Наибольший номер бочки: {}\n", max_barrel_number);
-                    }
-                } else {
-                    print!("Наибольший номер бочки: {}\n", max_barrel_number);
-                }
+                let (min_lvl, max_lvl, merges_remaining) = calculate_required_merges(&barrels);
+
+                // Находим цвет для максимального уровня бочки
+                let min_level_color = detector
+                    .templates
+                    .iter()
+                    .find(|t| {
+                        t.name
+                            .split_whitespace()
+                            .last()
+                            .and_then(|s| s.parse::<u32>().ok())
+                            == Some(min_lvl)
+                    })
+                    .map(|t| (t.red, t.green, t.blue))
+                    .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
+
+
+                // Находим цвет для максимального уровня бочки
+                let max_level_color = detector
+                    .templates
+                    .iter()
+                    .find(|t| {
+                        t.name
+                            .split_whitespace()
+                            .last()
+                            .and_then(|s| s.parse::<u32>().ok())
+                            == Some(max_lvl)
+                    })
+                    .map(|t| (t.red, t.green, t.blue))
+                    .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
+
+                // Находим цвет для целевого уровня (max_lvl + 1)
+                let target_level_color = detector
+                    .templates
+                    .iter()
+                    .find(|t| {
+                        t.name
+                            .split_whitespace()
+                            .last()
+                            .and_then(|s| s.parse::<u32>().ok())
+                            == Some(max_lvl + 1)
+                    })
+                    .map(|t| (t.red, t.green, t.blue))
+                    .unwrap_or((255.0, 255.0, 255.0)); // Белый цвет по умолчанию
+
+                print!(
+                    "| ⭣\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m ⭡\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m | ⭢\x1b[38;2;{:.0};{:.0};{:.0}m{}\x1b[0m ⭤{}",
+                    min_level_color.0,
+                    min_level_color.1,
+                    min_level_color.2,
+                    min_lvl,
+                    max_level_color.0,
+                    max_level_color.1,
+                    max_level_color.2,
+                    max_lvl,
+                    target_level_color.0,
+                    target_level_color.1,
+                    target_level_color.2,
+                    max_lvl + 1,
+                    merges_remaining
+                );
+                let cell_width = 4; // Минимальная ширина для "0" и двузначных чисел
+                let line_length = 4 * (cell_width + 2) + 1;
+                print!("\n{}\n", "-".repeat(line_length));
+
 
                 if !is_on_window && settings.human_like_movement.enabled {
                     human_like_move(original_x, original_y, &settings.human_like_movement)?;
