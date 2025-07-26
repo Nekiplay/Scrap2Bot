@@ -1,89 +1,28 @@
-use Scrap2Bot::capture::AppError;
-use Scrap2Bot::capture::AppResult;
-use Scrap2Bot::capture::capture_window_by_title;
-use Scrap2Bot::capture::get_window_size;
-use Scrap2Bot::objectdetector::DetectionResult;
-use Scrap2Bot::objectdetector::ObjectDetector;
-use Scrap2Bot::objectdetector::ObjectTemplate;
-use Scrap2Bot::settings::HumanLikeMovementSettings;
-use Scrap2Bot::settings::RandomOffsetSettings;
-use Scrap2Bot::settings::Settings;
 use crossterm::{execute, terminal::SetTitle};
 use opencv::core::Vector;
 use opencv::imgcodecs;
 use opencv::imgcodecs::IMREAD_COLOR;
 use opencv::prelude::MatTraitConst;
 use rand::Rng;
-use std::f64::consts::PI;
+use scrap2_bot::capture::AppError;
+use scrap2_bot::capture::AppResult;
+use scrap2_bot::capture::capture_window_by_title;
+use scrap2_bot::capture::change_window_title;
+use scrap2_bot::capture::get_window_size;
+use scrap2_bot::capture::is_cursor_in_window;
+use scrap2_bot::moving::human_like_move;
+use scrap2_bot::objectdetector::DetectionResult;
+use scrap2_bot::objectdetector::ObjectDetector;
+use scrap2_bot::objectdetector::ObjectTemplate;
+use scrap2_bot::settings::HumanLikeMovementSettings;
+use scrap2_bot::settings::RandomOffsetSettings;
+use scrap2_bot::settings::Settings;
+use std::env;
 use std::fs;
 use std::process::Command;
 use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
-
-fn change_window_title(partial_title: &str, new_title: &str) -> AppResult<()> {
-    // 1. Пробуем найти через wmctrl (более надежный)
-    let wmctrl_output = Command::new("wmctrl").args(&["-l"]).output()?;
-
-    if !wmctrl_output.status.success() {
-        return Err(AppError::WindowNotFound(
-            "Failed to list windows with wmctrl".to_string(),
-        ));
-    }
-
-    let output_str = String::from_utf8(wmctrl_output.stdout)?;
-    let mut window_id = None;
-
-    // Ищем окно, содержащее искомую подстроку
-    for line in output_str.lines() {
-        if line.contains(partial_title) {
-            if let Some(id) = line.split_whitespace().next() {
-                window_id = Some(id.to_string());
-                break;
-            }
-        }
-    }
-
-    // 2. Если не нашли через wmctrl, пробуем xdotool
-    let window_id = match window_id {
-        Some(id) => id,
-        None => {
-            let xdotool_output = Command::new("xdotool")
-                .args(&["search", "--name", partial_title, "--limit", "1"])
-                .output()?;
-
-            if !xdotool_output.status.success() {
-                return Err(AppError::WindowNotFound(format!(
-                    "Window containing '{}' not found with either wmctrl or xdotool",
-                    partial_title
-                )));
-            }
-
-            String::from_utf8(xdotool_output.stdout)?.trim().to_string()
-        }
-    };
-
-    if window_id.is_empty() {
-        return Err(AppError::WindowNotFound(format!(
-            "Window containing '{}' not found",
-            partial_title
-        )));
-    }
-
-    // 3. Пробуем изменить название через wmctrl
-    let wmctrl_status = Command::new("wmctrl")
-        .args(&["-ir", &window_id, "-T", new_title])
-        .status();
-
-    // 4. Если wmctrl не сработал, пробуем xdotool
-    if wmctrl_status.is_err() || !wmctrl_status.unwrap().success() {
-        Command::new("xdotool")
-            .args(&["set_window", "--name", new_title, &window_id])
-            .status()?;
-    }
-
-    Ok(())
-}
 
 fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
     let settings_path = "settings.json";
@@ -100,6 +39,7 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
             reference_width: width,
             reference_height: height,
             convert_to_grayscale: true,
+            use_gpu: true,
             random_offset: RandomOffsetSettings {
                 enabled: true,
                 max_x_offset: 5,
@@ -131,122 +71,13 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
     }
 }
 
-// Функция для генерации кривой Безье с человеческими характеристиками
-fn generate_human_like_path(
-    start: (i32, i32),
-    end: (i32, i32),
-    settings: &HumanLikeMovementSettings,
-) -> Vec<(i32, i32)> {
-    let mut rng = rand::thread_rng();
-    let mut path = Vec::new();
-
-    if !settings.enabled {
-        path.push(start);
-        path.push(end);
-        return path;
-    }
-
-    // Добавляем начальную точку
-    path.push(start);
-
-    // Создаем контрольные точки для кривой Безье
-    let dx = end.0 - start.0;
-    let dy = end.1 - start.1;
-
-    // Количество промежуточных точек
-    let num_points = settings.curve_smoothness.max(2);
-
-    // Генерируем небольшие отклонения
-    for i in 1..num_points {
-        let t = i as f64 / num_points as f64;
-
-        // Базовое линейное перемещение
-        let x = start.0 as f64 + dx as f64 * t;
-        let y = start.1 as f64 + dy as f64 * t;
-
-        // Добавляем случайное отклонение
-        let deviation_scale = (t * PI).sin().abs() * settings.max_deviation;
-        let dev_x = rng.gen_range(-deviation_scale..deviation_scale);
-        let dev_y = rng.gen_range(-deviation_scale..deviation_scale);
-
-        path.push(((x + dev_x).round() as i32, (y + dev_y).round() as i32));
-    }
-
-    // Добавляем конечную точку
-    path.push(end);
-
-    path
-}
-
-// Модифицированная функция перемещения
-fn human_like_move(x: i32, y: i32, settings: &HumanLikeMovementSettings) -> AppResult<()> {
-    let mut rng = rand::thread_rng();
-
-    if !settings.enabled {
-        Command::new("xdotool")
-            .args(&["mousemove", &x.to_string(), &y.to_string()])
-            .status()?;
-        return Ok(());
-    }
-
-    // Получаем текущую позицию курсора
-    let output = Command::new("xdotool")
-        .args(&["getmouselocation", "--shell"])
-        .output()?;
-
-    let output_str = String::from_utf8(output.stdout)?;
-    let mut current_x = 0;
-    let mut current_y = 0;
-
-    for line in output_str.lines() {
-        if line.starts_with("X=") {
-            current_x = line[2..].parse().unwrap_or(0);
-        } else if line.starts_with("Y=") {
-            current_y = line[2..].parse().unwrap_or(0);
-        }
-    }
-
-    // Генерируем путь
-    let path = generate_human_like_path((current_x, current_y), (x, y), settings);
-
-    // Двигаемся по пути с переменной скоростью
-    for i in 0..path.len() - 1 {
-        let (from_x, from_y) = path[i];
-        let (to_x, to_y) = path[i + 1];
-
-        // Вычисляем расстояние между точками
-        let dx = to_x - from_x;
-        let dy = to_y - from_y;
-        let distance = ((dx * dx + dy * dy) as f64).sqrt();
-
-        // Базовое время движения (миллисекунды на пиксель)
-        let base_speed = settings.base_speed
-            + rng.gen_range(-settings.speed_variation..settings.speed_variation);
-        let move_time = (distance * base_speed).max(1.0) as u64;
-
-        // Плавное перемещение между точками
-        Command::new("xdotool")
-            .args(&["mousemove_relative", "--", &dx.to_string(), &dy.to_string()])
-            .status()?;
-
-        // Случайная пауза для имитации человеческой реакции
-        if i < path.len() - 2 {
-            let pause_time = rng.gen_range(settings.min_pause_ms..settings.max_pause_ms);
-            thread::sleep(Duration::from_millis(pause_time));
-        }
-
-        thread::sleep(Duration::from_millis(move_time));
-    }
-
-    Ok(())
-}
-
 fn display_results_as_table(
     detections: &[DetectionResult],
     cols: usize,
     rows: usize,
     templates: &[Arc<ObjectTemplate>],
     detection_time: usize,
+    fps: f64,
 ) {
     if detections.is_empty() {
         print!("No objects detected\n");
@@ -297,7 +128,7 @@ fn display_results_as_table(
     let cell_width = 5;
     let empty_cell = format!(" {:^3} ", ""); // Centered empty cell
 
-    // Print table header
+    // Print table header (исправлено: убрано дублирование)
     print!("╔");
     for c in 0..cols {
         print!("{}", "═".repeat(cell_width));
@@ -308,7 +139,8 @@ fn display_results_as_table(
     println!("╗");
 
     // Print table rows
-    for row in 0..rows {
+    for row in 0..rows - 1 {
+        // Изменено: rows-1 чтобы последняя строка обрабатывалась отдельно
         print!("║");
         for col in 0..cols {
             if let Some((num, (r, g, b))) = &table[row][col] {
@@ -324,20 +156,34 @@ fn display_results_as_table(
         }
         println!();
 
-        // Print row separator if not last row
-        if row < rows - 1 {
-            print!("╠");
-            for c in 0..cols {
-                print!("{}", "═".repeat(cell_width));
-                if c < cols - 1 {
-                    print!("╬");
-                }
+        // Print row separator
+        print!("╠");
+        for c in 0..cols {
+            print!("{}", "═".repeat(cell_width));
+            if c < cols - 1 {
+                print!("╬");
             }
-            println!("╣");
         }
+        println!("╣");
     }
 
-    // Print table footer
+    // Print last row with FPS (исправлено: убрано дублирование последней строки)
+    print!("║");
+    for col in 0..cols {
+        if let Some((num, (r, g, b))) = &table[rows - 1][col] {
+            if *num != 0 {
+                print!(" \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ", r, g, b, num);
+            } else {
+                print!("{}", empty_cell);
+            }
+        } else {
+            print!("{}", empty_cell);
+        }
+        print!("║");
+    }
+    println!(" {:.0}fps", fps);
+
+    // Print table footer with detection time
     print!("╚");
     for c in 0..cols {
         print!("{}", "═".repeat(cell_width));
@@ -348,21 +194,21 @@ fn display_results_as_table(
     println!("╝ {}ms", detection_time);
 
     // Statistics section
-let min_w = 5;      // Ширина для min_lvl
-let max_w = 5;      // Ширина для max_lvl
-let target_w = 5;   // Ширина для target
-let merges_w = 10;   // Увеличил ширину для merges_remaining (было 7)
-let total_width = min_w + max_w + target_w + merges_w + 5; // 3 пробела между колонками
+    let min_w = 5; // Ширина для min_lvl
+    let max_w = 5; // Ширина для max_lvl
+    let target_w = 5; // Ширина для target
+    let merges_w = 10; // Увеличил ширину для merges_remaining 
+    let total_width = min_w + max_w + target_w + merges_w + 5; // 3 пробела между колонками
 
-println!("╔{}╗", "═".repeat(total_width));
-println!(
-    "║ {:^min_w$} {:^max_w$} {:^target_w$} {:>merges_w$} ║",
-    format!("⭣{}", min_lvl),
-    format!("⭡{}", max_lvl),
-    format!("⭢{}", max_lvl + 1),
-    format!("⭤{}", merges_remaining)
-);
-println!("╚{}╝", "═".repeat(total_width));
+    println!("╔{}╗", "═".repeat(total_width));
+    println!(
+        "║ {:^min_w$} {:^max_w$} {:^target_w$} {:>merges_w$} ║",
+        format!("⭣{}", min_lvl),
+        format!("⭡{}", max_lvl),
+        format!("⭢{}", max_lvl + 1),
+        format!("⭤{}", merges_remaining)
+    );
+    println!("╚{}╝", "═".repeat(total_width));
 }
 
 fn check_and_suggest_window_size(
@@ -430,36 +276,6 @@ fn check_and_suggest_window_size(
     Ok(())
 }
 
-use std::env;
-
-fn is_cursor_in_window(
-    window_x: i32,
-    window_y: i32,
-    window_width: i32,
-    window_height: i32,
-) -> AppResult<bool> {
-    let output = Command::new("xdotool")
-        .args(&["getmouselocation", "--shell"])
-        .output()?;
-
-    let output_str = String::from_utf8(output.stdout)?;
-    let mut cursor_x = 0;
-    let mut cursor_y = 0;
-
-    for line in output_str.lines() {
-        if line.starts_with("X=") {
-            cursor_x = line[2..].parse().unwrap_or(0);
-        } else if line.starts_with("Y=") {
-            cursor_y = line[2..].parse().unwrap_or(0);
-        }
-    }
-
-    Ok(cursor_x >= window_x
-        && cursor_x <= window_x + window_width
-        && cursor_y >= window_y
-        && cursor_y <= window_y + window_height)
-}
-
 fn calculate_required_merges(barrels: &[DetectionResult]) -> (u32, u32, u32) {
     // Собираем статистику по уровням бочек
     let mut level_counts = std::collections::HashMap::new();
@@ -514,7 +330,7 @@ fn process_barrels(
 ) -> AppResult<(Vec<DetectionResult>, (i32, i32))> {
     let mut rng = rand::thread_rng();
 
-    // Получаем текущую позицию курсора только один раз в начале
+    // Получаем текущую позицию курсора
     let original_pos = Command::new("xdotool")
         .args(&["getmouselocation", "--shell"])
         .output()?;
@@ -680,6 +496,7 @@ fn process_barrels(
 fn main() -> AppResult<()> {
     let args: Vec<String> = env::args().collect();
     let infinite_mode = args.iter().any(|arg| arg == "--infinite" || arg == "-i");
+    let debug_mode = args.iter().any(|arg| arg == "--debug" || arg == "-d");
     execute!(std::io::stdout(), SetTitle("Scrap II Bot"))?;
 
     let window_title = "M2006C3MNG";
@@ -720,7 +537,8 @@ fn main() -> AppResult<()> {
         detector.empty_template_index,
         detector.empty_template_index + 5,
     ); // Начинаем с Empty + первые 5 бочек
-
+    let mut last_frame_time = std::time::Instant::now();
+    let mut fps = 0.0;
     loop {
         let screenshot_path = "screenshot.png";
         let (window_x, window_y) =
@@ -741,8 +559,15 @@ fn main() -> AppResult<()> {
 
         let is_on_window = is_cursor_in_window(window_x, window_y, window_width, window_height)?;
 
-        detector.draw_detections(&mut image, &detections)?;
-        imgcodecs::imwrite("result.png", &image, &Vector::new())?;
+        let current_time = std::time::Instant::now();
+        let frame_time = current_time.duration_since(last_frame_time).as_secs_f64();
+        fps = 0.9 * fps + 0.1 * (1.0 / frame_time); // Сглаживание FPS
+        last_frame_time = current_time;
+
+        if debug_mode {
+            detector.draw_detections(&mut image, &detections)?;
+            imgcodecs::imwrite("result.png", &image, &Vector::new())?;
+        }
 
         // Обработка облака мангинитов
         let cloud: Vec<DetectionResult> = detections
@@ -752,6 +577,23 @@ fn main() -> AppResult<()> {
             .collect();
 
         if cloud.len() > 0 {
+            // Получаем текущую позицию курсора
+            let original_pos = Command::new("xdotool")
+                .args(&["getmouselocation", "--shell"])
+                .output()?;
+
+            let original_pos = String::from_utf8(original_pos.stdout)?;
+            let mut original_x = 0;
+            let mut original_y = 0;
+
+            for line in original_pos.lines() {
+                if line.starts_with("X=") {
+                    original_x = line[2..].parse().unwrap_or(0);
+                } else if line.starts_with("Y=") {
+                    original_y = line[2..].parse().unwrap_or(0);
+                }
+            }
+
             let fast_movement_settings = HumanLikeMovementSettings {
                 enabled: true, // Включено для горизонтальных движений
                 max_deviation: 0.000001,
@@ -845,7 +687,7 @@ fn main() -> AppResult<()> {
             };
 
             // Вычисляем шаг для зигзага (примерно 1/8 высоты окна)
-            let step_height = (window_height - 260) / 9;
+            let step_height = window_height / 11;
 
             // Создаем зигзагообразный маршрут от верха до низа окна
             let mut current_y = window_y + 50 + step_height;
@@ -863,7 +705,7 @@ fn main() -> AppResult<()> {
             // 2. Нажимаем кнопку мыши
             Command::new("xdotool").args(&["mousedown", "1"]).status()?;
 
-            while current_y < window_y + window_height - step_height {
+            while current_y < window_y + window_height - 80 - step_height {
                 // Движение вправо - с human-like движением
                 human_like_move(right_x, current_y, &fast_movement_settings)?;
                 for i in 0..5 {
@@ -911,6 +753,7 @@ fn main() -> AppResult<()> {
 
             // Отпускаем кнопку мыши
             Command::new("xdotool").args(&["mouseup", "1"]).status()?;
+            human_like_move(original_x, original_y, &settings.human_like_movement)?;
 
             // После обработки облака продолжаем основной цикл
             thread::sleep(Duration::from_millis(3));
@@ -931,6 +774,7 @@ fn main() -> AppResult<()> {
                 5,
                 &detector.templates,
                 detection_time.try_into().unwrap_or(0),
+                fps,
             );
 
             // Сортируем бочки по номеру (от меньшего к большему)
@@ -952,7 +796,7 @@ fn main() -> AppResult<()> {
                 num_a.cmp(&num_b)
             });
 
-            let (barrels, (original_x, original_y)) =
+            let (_, (original_x, original_y)) =
                 process_barrels(window_x, window_y, barrels, &mut detector, &settings)?;
 
             if !is_on_window && settings.human_like_movement.enabled {

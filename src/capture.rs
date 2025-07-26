@@ -165,6 +165,98 @@ pub fn get_window_size(window_title: &str) -> AppResult<(i32, i32)> {
     Ok((width, height))
 }
 
+pub fn change_window_title(partial_title: &str, new_title: &str) -> AppResult<()> {
+    // 1. Пробуем найти через wmctrl (более надежный)
+    let wmctrl_output = Command::new("wmctrl").args(&["-l"]).output()?;
+
+    if !wmctrl_output.status.success() {
+        return Err(AppError::WindowNotFound(
+            "Failed to list windows with wmctrl".to_string(),
+        ));
+    }
+
+    let output_str = String::from_utf8(wmctrl_output.stdout)?;
+    let mut window_id = None;
+
+    // Ищем окно, содержащее искомую подстроку
+    for line in output_str.lines() {
+        if line.contains(partial_title) {
+            if let Some(id) = line.split_whitespace().next() {
+                window_id = Some(id.to_string());
+                break;
+            }
+        }
+    }
+
+    // 2. Если не нашли через wmctrl, пробуем xdotool
+    let window_id = match window_id {
+        Some(id) => id,
+        None => {
+            let xdotool_output = Command::new("xdotool")
+                .args(&["search", "--name", partial_title, "--limit", "1"])
+                .output()?;
+
+            if !xdotool_output.status.success() {
+                return Err(AppError::WindowNotFound(format!(
+                    "Window containing '{}' not found with either wmctrl or xdotool",
+                    partial_title
+                )));
+            }
+
+            String::from_utf8(xdotool_output.stdout)?.trim().to_string()
+        }
+    };
+
+    if window_id.is_empty() {
+        return Err(AppError::WindowNotFound(format!(
+            "Window containing '{}' not found",
+            partial_title
+        )));
+    }
+
+    // 3. Пробуем изменить название через wmctrl
+    let wmctrl_status = Command::new("wmctrl")
+        .args(&["-ir", &window_id, "-T", new_title])
+        .status();
+
+    // 4. Если wmctrl не сработал, пробуем xdotool
+    if wmctrl_status.is_err() || !wmctrl_status.unwrap().success() {
+        Command::new("xdotool")
+            .args(&["set_window", "--name", new_title, &window_id])
+            .status()?;
+    }
+
+    Ok(())
+}
+
+pub fn is_cursor_in_window(
+    window_x: i32,
+    window_y: i32,
+    window_width: i32,
+    window_height: i32,
+) -> AppResult<bool> {
+    let output = Command::new("xdotool")
+        .args(&["getmouselocation", "--shell"])
+        .output()?;
+
+    let output_str = String::from_utf8(output.stdout)?;
+    let mut cursor_x = 0;
+    let mut cursor_y = 0;
+
+    for line in output_str.lines() {
+        if line.starts_with("X=") {
+            cursor_x = line[2..].parse().unwrap_or(0);
+        } else if line.starts_with("Y=") {
+            cursor_y = line[2..].parse().unwrap_or(0);
+        }
+    }
+
+    Ok(cursor_x >= window_x
+        && cursor_x <= window_x + window_width
+        && cursor_y >= window_y
+        && cursor_y <= window_y + window_height)
+}
+
 pub fn parse_window_id(geometry_output: &str) -> AppResult<u32> {
     geometry_output
         .lines()
