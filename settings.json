@@ -25,6 +25,7 @@
     "max_move_delay_ms": 12
   },
   "convert_to_grayscale": false,
+  "use_gpu": true,
   "templates": [
         {
             "name": "Cloud",

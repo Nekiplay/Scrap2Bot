@@ -20,6 +20,7 @@ use opencv::imgproc::TM_CCOEFF_NORMED;
 use opencv::imgproc::cvt_color;
 use opencv::imgproc::resize;
 use opencv::imgproc::threshold;
+use opencv::opencv_has_inherent_feature_cuda;
 use opencv::prelude::MatTrait;
 use opencv::prelude::MatTraitConst;
 use rayon::iter::IntoParallelRefIterator;
@@ -105,10 +106,144 @@ pub struct ObjectDetector {
     pub empty_template_index: usize,  // Индекс шаблона Empty
     pub cloud_template_index: usize,  // Индекс шаблона Cloud
     pub full_range: bool,
+    pub use_cuda: bool,
+}
+
+// CUDA-specific implementations
+opencv_has_inherent_feature_cuda! {
+    {
+        use opencv::core::GpuMat;
+        use opencv::cudaimgproc;
+        use opencv::cudawarping;
+
+        impl ObjectDetector {
+            fn prepare_image_cuda(&self, image: &Mat, convert_to_grayscale: bool) -> OpenCVResult<GpuMat> {
+                let mut gpu_img = GpuMat::new()?;
+                gpu_img.upload(image)?;
+
+                if convert_to_grayscale {
+                    let mut gray = GpuMat::new()?;
+                    cudaimgproc::cvt_color(&gpu_img, &mut gray, COLOR_BGR2GRAY, 0, &mut opencv::core::Stream::default()?)?;
+                    gpu_img = gray;
+                }
+
+                let mut resized = GpuMat::new()?;
+                cudawarping::resize(
+                    &gpu_img,
+                    &mut resized,
+                    Size::new(0, 0),
+                    self.base_scale_factor,
+                    self.base_scale_factor,
+                    INTER_AREA,
+                    &mut opencv::core::Stream::default()?,
+                )?;
+
+                Ok(resized)
+            }
+
+            fn match_template_cuda(
+                &self,
+                image: &GpuMat,
+                template: &GpuMat,
+                threshold: f64,
+            ) -> OpenCVResult<Vec<DetectionResult>> {
+                let mut result_mat = GpuMat::new()?;
+                cudaimgproc::match_template(
+                    image,
+                    template,
+                    &mut result_mat,
+                    TM_CCOEFF_NORMED,
+                    &GpuMat::new()?,
+                    &mut opencv::core::Stream::default()?,
+                )?;
+
+                let mut result_mat_cpu = Mat::default();
+                result_mat.download(&mut result_mat_cpu)?;
+
+                let mut thresholded = Mat::default();
+                threshold(
+                    &result_mat_cpu,
+                    &mut thresholded,
+                    threshold,
+                    1.0,
+                    THRESH_BINARY,
+                )?;
+
+                let mut mask_8u = Mat::default();
+                thresholded.convert_to(&mut mask_8u, CV_8U, 255.0, 0.0)?;
+
+                let mut results = Vec::new();
+                let mut max_val = f64::MIN;
+                let mut max_loc = Point::default();
+
+                loop {
+                    min_max_loc(
+                        &result_mat_cpu,
+                        None,
+                        Some(&mut max_val),
+                        None,
+                        Some(&mut max_loc),
+                        &mask_8u,
+                    )?;
+
+                    if max_val < threshold {
+                        break;
+                    }
+
+                    results.push(DetectionResult {
+                        object_name: template.name.clone(),
+                        location: Point::new(
+                            (max_loc.x as f64 / self.base_scale_factor) as i32,
+                            (max_loc.y as f64 / self.base_scale_factor) as i32,
+                        ),
+                        confidence: max_val,
+                    });
+
+                    // Обнуляем найденную область
+                    let _ = imgproc::rectangle(
+                        &mut result_mat_cpu,
+                        Rect::new(
+                            max_loc.x - template.cols()? / 2,
+                            max_loc.y - template.rows()? / 2,
+                            template.cols()?,
+                            template.rows()?,
+                        ),
+                        Scalar::all(0.0),
+                        FILLED,
+                        LineTypes::LINE_8.into(),
+                        0,
+                    );
+
+                    let _ = imgproc::rectangle(
+                        &mut mask_8u,
+                        Rect::new(
+                            max_loc.x - template.cols()? / 2,
+                            max_loc.y - template.rows()? / 2,
+                            template.cols()?,
+                            template.rows()?,
+                        ),
+                        Scalar::all(0.0),
+                        FILLED,
+                        LineTypes::LINE_8.into(),
+                        0,
+                    );
+
+                    max_val = f64::MIN;
+                }
+
+                Ok(results)
+            }
+        }
+    }
 }
 
 impl ObjectDetector {
     pub fn new(base_scale_factor: f64) -> Self {
+        let cuda_available = opencv_has_inherent_feature_cuda! {
+            { opencv::core::get_cuda_enabled_device_count().unwrap_or(0) > 0 }
+            else {  println!("CUDA not found"); false }
+        };
+
         Self {
             templates: Vec::new(),
             base_scale_factor,
@@ -116,6 +251,7 @@ impl ObjectDetector {
             empty_template_index: 0,
             cloud_template_index: 0,
             full_range: true, // Флаг полного диапазона
+            use_cuda: cuda_available,
         }
     }
 
@@ -255,6 +391,14 @@ impl ObjectDetector {
         convert_to_grayscale: bool,
     ) -> OpenCVResult<(Vec<DetectionResult>, u128)> {
         let start_time = Instant::now();
+
+        opencv_has_inherent_feature_cuda! {
+            {
+                if self.use_cuda {
+                    return self.detect_objects_cuda(image, convert_to_grayscale);
+                }
+            }
+        }
 
         // Подготовка изображения
         let working_image = if convert_to_grayscale {
@@ -437,6 +581,94 @@ impl ObjectDetector {
             self.filter_close_detections(all_results.into_iter().flatten().collect()),
             elapsed_ms,
         ))
+    }
+
+    opencv_has_inherent_feature_cuda! {
+        {
+            fn detect_objects_cuda(
+                &mut self,
+                image: &Mat,
+                convert_to_grayscale: bool,
+            ) -> OpenCVResult<(Vec<DetectionResult>, u128)> {
+                use opencv::core::GpuMat;
+                use opencv::cudawarping;
+
+                let start_time = Instant::now();
+
+                // Подготовка изображения на GPU
+                let gpu_image = self.prepare_image_cuda(image, convert_to_grayscale)?;
+
+                let active_templates = self.get_active_templates();
+                let all_results: Vec<Vec<DetectionResult>> = active_templates
+                    .par_iter()
+                    .map(|template| {
+                        let template_image = if convert_to_grayscale {
+                            &template.gray_template
+                        } else {
+                            &template.template
+                        };
+
+                        // Загрузка шаблона на GPU
+                        let mut gpu_template = GpuMat::new().ok()?;
+                        gpu_template.upload(template_image).ok()?;
+
+                        // Масштабирование шаблона
+                        let mut scaled_template = GpuMat::new().ok()?;
+                        let scale_factor = template.resolution.unwrap_or(self.base_scale_factor);
+                        cudawarping::resize(
+                            &gpu_template,
+                            &mut scaled_template,
+                            Size::new(0, 0),
+                            scale_factor,
+                            scale_factor,
+                            INTER_AREA,
+                            &mut opencv::core::Stream::default().ok()?,
+                        ).ok()?;
+
+                        // Сопоставление шаблонов на GPU
+                        self.match_template_cuda(&gpu_image, &scaled_template, template.threshold)
+                            .unwrap_or_default()
+                    })
+                    .collect();
+
+                let elapsed = start_time.elapsed();
+                let elapsed_ms = elapsed.as_millis();
+
+                print!("\x1B[2J\x1B[3J\x1B[H");
+                io::stdout().flush().map_err(|e| {
+                    opencv::Error::new(
+                        opencv::core::StsError,
+                        format!("Failed to flush stdout: {}", e),
+                    )
+                })?;
+
+                let detected_numbers: Vec<u32> = all_results
+                    .iter()
+                    .flatten()
+                    .filter_map(|d| {
+                        d.object_name
+                            .split_whitespace()
+                            .last()
+                            .and_then(|s| s.parse().ok())
+                    })
+                    .collect();
+
+                self.update_active_range(&detected_numbers);
+
+                Ok((
+                    self.filter_close_detections(all_results.into_iter().flatten().collect()),
+                    elapsed_ms,
+                ))
+            }
+        }
+    }
+
+    pub fn set_use_cuda(&mut self, use_cuda: bool) {
+        self.use_cuda = use_cuda
+            && opencv_has_inherent_feature_cuda! {
+                { opencv::core::get_cuda_enabled_device_count().unwrap_or(0) > 0 }
+                else { false }
+            };
     }
 
     pub fn filter_close_detections(

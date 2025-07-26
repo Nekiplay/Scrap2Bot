@@ -9,7 +9,6 @@ pub struct Settings {
     pub reference_width: i32,
     pub reference_height: i32,
     pub convert_to_grayscale: bool,
-    pub use_gpu: bool,
     pub templates: Vec<TemplateSettings>,
     pub random_offset: RandomOffsetSettings,
     pub human_like_movement: HumanLikeMovementSettings,

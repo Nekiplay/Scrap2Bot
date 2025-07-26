@@ -39,7 +39,6 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
             reference_width: width,
             reference_height: height,
             convert_to_grayscale: true,
-            use_gpu: true,
             random_offset: RandomOffsetSettings {
                 enabled: true,
                 max_x_offset: 5,
