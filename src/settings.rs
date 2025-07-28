@@ -48,4 +48,6 @@ pub struct TemplateSettings {
     pub green: f32,
     pub blue: f32,
     pub resolution: Option<f64>,
+    #[serde(default)]
+    pub always_active: bool,
 }

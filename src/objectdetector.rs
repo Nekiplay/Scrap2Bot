@@ -6,7 +6,6 @@ use opencv::core::Point;
 use opencv::core::Rect;
 use opencv::core::Scalar;
 use opencv::core::Size;
-use opencv::core::in_range;
 use opencv::core::min_max_loc;
 use opencv::imgcodecs;
 use opencv::imgcodecs::IMREAD_COLOR;
@@ -21,12 +20,9 @@ use opencv::imgproc::cvt_color;
 use opencv::imgproc::resize;
 use opencv::imgproc::threshold;
 use opencv::opencv_has_inherent_feature_cuda;
-use opencv::prelude::MatTrait;
 use opencv::prelude::MatTraitConst;
 use rayon::iter::IntoParallelRefIterator;
 use rayon::iter::ParallelIterator;
-use std::io;
-use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -41,6 +37,7 @@ pub struct ObjectTemplate {
     pub green: f32,
     pub blue: f32,
     pub resolution: Option<f64>,
+    pub always_active: bool,
 }
 
 impl ObjectTemplate {
@@ -53,21 +50,9 @@ impl ObjectTemplate {
         green: f32,
         blue: f32,
         resolution: Option<f64>,
+        always_active: bool,
     ) -> OpenCVResult<Self> {
-        let mut template = imgcodecs::imread(template_path, IMREAD_COLOR)?;
-
-        // Удаляем цвет (154, 195, 161) из шаблона
-        let mut mask = Mat::default();
-        in_range(
-            &template,
-            &Scalar::new(150.0, 190.0, 150.0, 0.0), // Нижняя граница с небольшим запасом
-            &Scalar::new(158.0, 200.0, 158.0, 0.0), // Верхняя граница с небольшим запасом
-            &mut mask,
-        )?;
-
-        // Заменяем цвет на прозрачный (черный)
-        let black = Scalar::all(0.0);
-        template.set_to(&black, &mask)?;
+        let template = imgcodecs::imread(template_path, IMREAD_COLOR)?;
 
         let mut gray_template = Mat::default();
         cvt_color(
@@ -88,6 +73,7 @@ impl ObjectTemplate {
             green,
             blue,
             resolution,
+            always_active,
         })
     }
 }
@@ -103,8 +89,6 @@ pub struct ObjectDetector {
     pub templates: Vec<Arc<ObjectTemplate>>,
     pub base_scale_factor: f64,
     pub active_range: (usize, usize), // (start, end) индексы активных шаблонов
-    pub empty_template_index: usize,  // Индекс шаблона Empty
-    pub cloud_template_index: usize,  // Индекс шаблона Cloud
     pub full_range: bool,
     pub use_cuda: bool,
 }
@@ -248,8 +232,6 @@ impl ObjectDetector {
             templates: Vec::new(),
             base_scale_factor,
             active_range: (0, 0), // Будет установлено при добавлении шаблонов
-            empty_template_index: 0,
-            cloud_template_index: 0,
             full_range: true, // Флаг полного диапазона
             use_cuda: cuda_available,
         }
@@ -335,19 +317,25 @@ impl ObjectDetector {
     pub fn get_active_templates(&self) -> Vec<Arc<ObjectTemplate>> {
         let mut result = Vec::new();
 
-        // Всегда включаем шаблон Empty
-        if self.empty_template_index < self.templates.len() {
-            result.push(self.templates[self.empty_template_index].clone());
-        }
-        if self.cloud_template_index < self.templates.len() {
-            result.push(self.templates[self.cloud_template_index].clone());
+        // Добавляем шаблоны с флагом always_active
+        for template in &self.templates {
+            if template.always_active
+                && !result
+                    .iter()
+                    .any(|t: &Arc<ObjectTemplate>| t.name == template.name)
+            {
+                result.push(template.clone());
+            }
         }
 
-        // Добавляем шаблоны из активного диапазона (исключая Empty, если он уже добавлен)
+        // Добавляем шаблоны из активного диапазона (исключая уже добавленные)
         let (start, end) = self.active_range;
         for i in start..=end {
             if i < self.templates.len()
-                && (i != self.empty_template_index && i != self.cloud_template_index)
+                && !self.templates[i].always_active
+                && !result
+                    .iter()
+                    .any(|t: &Arc<ObjectTemplate>| t.name == self.templates[i].name)
             {
                 result.push(self.templates[i].clone());
             }
@@ -366,6 +354,7 @@ impl ObjectDetector {
         green: f32,
         blue: f32,
         resolution: Option<f64>,
+        always_active: bool,
     ) -> OpenCVResult<()> {
         let template = ObjectTemplate::new(
             name,
@@ -376,6 +365,7 @@ impl ObjectDetector {
             green,
             blue,
             resolution,
+            always_active,
         )?;
         self.templates.push(Arc::new(template));
 
@@ -555,14 +545,6 @@ impl ObjectDetector {
             .collect();
         let elapsed = start_time.elapsed();
         let elapsed_ms = elapsed.as_millis();
-        // Очищаем терминал и выводим информацию
-        print!("\x1B[2J\x1B[3J\x1B[H");
-        io::stdout().flush().map_err(|e| {
-            opencv::Error::new(
-                opencv::core::StsError,
-                format!("Failed to flush stdout: {}", e),
-            )
-        })?;
 
         let detected_numbers: Vec<u32> = all_results
             .iter()

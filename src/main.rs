@@ -19,6 +19,8 @@ use scrap2_bot::settings::RandomOffsetSettings;
 use scrap2_bot::settings::Settings;
 use std::env;
 use std::fs;
+use std::io;
+use std::io::Write;
 use std::process::Command;
 use std::sync::Arc;
 use std::thread;
@@ -438,7 +440,7 @@ fn process_barrels(
                         ..settings.human_like_movement.max_down_ms,
                 )));
             } else {
-                thread::sleep(Duration::from_millis(rng.gen_range(2..5)));
+                thread::sleep(Duration::from_millis(rng.gen_range(5..15)));
             }
 
             // Нажимаем кнопку мыши
@@ -458,13 +460,13 @@ fn process_barrels(
             human_like_move(abs_to_x, abs_to_y, &settings.human_like_movement)?;
 
             // Небольшая пауза перед отпусканием
-            thread::sleep(Duration::from_millis(rng.gen_range(6..12)));
+            thread::sleep(Duration::from_millis(rng.gen_range(8..12)));
             if settings.human_like_movement.enabled {
                 thread::sleep(Duration::from_millis(rng.gen_range(
                     settings.human_like_movement.min_up_ms..settings.human_like_movement.max_up_ms,
                 )));
             } else {
-                thread::sleep(Duration::from_millis(rng.gen_range(5..12)));
+                thread::sleep(Duration::from_millis(rng.gen_range(8..12)));
             }
 
             // Отпускаем кнопку мыши
@@ -522,19 +524,14 @@ fn main() -> AppResult<()> {
             template_settings.green,
             template_settings.blue,
             template_settings.resolution,
+            template_settings.always_active,
         )?;
-
-        if template_settings.name == "Empty" {
-            detector.empty_template_index = i;
-        } else if template_settings.name == "Cloud" {
-            detector.cloud_template_index = i;
-        }
     }
 
     // Инициализируем начальный диапазон
     detector.active_range = (
-        detector.empty_template_index,
-        detector.empty_template_index + 5,
+        0,
+        50,
     ); // Начинаем с Empty + первые 5 бочек
     let mut last_frame_time = std::time::Instant::now();
     let mut fps = 0.0;
@@ -566,6 +563,76 @@ fn main() -> AppResult<()> {
         if debug_mode {
             detector.draw_detections(&mut image, &detections)?;
             imgcodecs::imwrite("result.png", &image, &Vector::new())?;
+        }
+
+        // Обработка мангинитов
+        let magnets: Vec<DetectionResult> = detections
+            .clone()
+            .into_iter()
+            .filter(|d| d.object_name.starts_with("Magnet"))
+            .collect();
+        if !magnets.is_empty() {
+            let original_pos = Command::new("xdotool")
+                .args(&["getmouselocation", "--shell"])
+                .output()?;
+
+            let original_pos = String::from_utf8(original_pos.stdout)?;
+            let mut original_x = 0;
+            let mut original_y = 0;
+
+            for line in original_pos.lines() {
+                if line.starts_with("X=") {
+                    original_x = line[2..].parse().unwrap_or(0);
+                } else if line.starts_with("Y=") {
+                    original_y = line[2..].parse().unwrap_or(0);
+                }
+            }
+
+            let mut rng = rand::thread_rng();
+
+            for magnet in magnets {
+                let template = detector
+                    .templates
+                    .iter()
+                    .find(|t| t.name == magnet.object_name)
+                    .ok_or_else(|| {
+                        AppError::ImageProcessing("Magnet template not found".to_string())
+                    })?;
+
+                // Вычисляем позицию с учетом случайного смещения
+                let (offset_x, offset_y) = if settings.random_offset.enabled {
+                    (
+                        rng.gen_range(
+                            -settings.random_offset.max_x_offset
+                                ..=settings.random_offset.max_x_offset,
+                        ),
+                        rng.gen_range(
+                            -settings.random_offset.max_y_offset
+                                ..=settings.random_offset.max_y_offset,
+                        ),
+                    )
+                } else {
+                    (0, 0)
+                };
+
+                let abs_x = window_x + magnet.location.x + template.template.cols() / 2 + offset_x;
+                let abs_y = window_y + magnet.location.y + template.template.rows() / 2 + offset_y;
+
+                // Перемещаемся к магниту
+                human_like_move(abs_x, abs_y, &settings.human_like_movement)?;
+
+                // Небольшая пауза перед кликом
+                thread::sleep(Duration::from_millis(rng.gen_range(2..4)));
+
+                // Кликаем
+                Command::new("xdotool").args(&["click", "1"]).status()?;
+
+                // Небольшая пауза после клика
+                thread::sleep(Duration::from_millis(rng.gen_range(3..8)));
+            }
+
+            // Возвращаем курсор на исходную позицию
+            human_like_move(original_x, original_y, &settings.human_like_movement)?;
         }
 
         // Обработка облака мангинитов
@@ -767,6 +834,14 @@ fn main() -> AppResult<()> {
             .collect();
 
         if barrels.len() > 0 {
+            // Очищаем терминал и выводим информацию
+            print!("\x1B[2J\x1B[3J\x1B[H");
+            io::stdout().flush().map_err(|e| {
+                opencv::Error::new(
+                    opencv::core::StsError,
+                    format!("Failed to flush stdout: {}", e),
+                )
+            })?;
             display_results_as_table(
                 &detections,
                 4,
