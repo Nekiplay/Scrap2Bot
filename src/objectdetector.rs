@@ -232,7 +232,7 @@ impl ObjectDetector {
             templates: Vec::new(),
             base_scale_factor,
             active_range: (0, 0), // Будет установлено при добавлении шаблонов
-            full_range: true, // Флаг полного диапазона
+            full_range: true,     // Флаг полного диапазона
             use_cuda: cuda_available,
         }
     }

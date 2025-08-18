@@ -72,6 +72,26 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
     }
 }
 
+fn get_contrast_text_color(bg_r: f32, bg_g: f32, bg_b: f32) -> &'static str {
+    // Конвертируем значения RGB в диапазон 0-1
+    let r = bg_r / 255.0;
+    let g = bg_g / 255.0;
+    let b = bg_b / 255.0;
+
+    // Вычисляем относительную яркость по формуле W3C
+    let luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+
+    // Пороговое значение для выбора цвета текста (как в VS Code)
+    // VS Code использует порог 0.5, но можно настроить
+    if luminance > 0.5 {
+        // Для светлых фонов - черный текст
+        "\x1b[38;2;0;0;0m" // ANSI escape для черного цвета (#000000)
+    } else {
+        // Для темных фонов - белый текст
+        "\x1b[38;2;255;255;255m" // ANSI escape для белого цвета (#FFFFFF)
+    }
+}
+
 fn display_results_as_table(
     detections: &[DetectionResult],
     cols: usize,
@@ -146,7 +166,11 @@ fn display_results_as_table(
         for col in 0..cols {
             if let Some((num, (r, g, b))) = &table[row][col] {
                 if *num != 0 {
-                    print!(" \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ", r, g, b, num);
+                    let text_color = get_contrast_text_color(*r, *g, *b);
+                    print!(
+                        " {}\x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ",
+                        text_color, r, g, b, num
+                    );
                 } else {
                     print!("{}", empty_cell);
                 }
@@ -173,7 +197,11 @@ fn display_results_as_table(
     for col in 0..cols {
         if let Some((num, (r, g, b))) = &table[rows - 1][col] {
             if *num != 0 {
-                print!(" \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ", r, g, b, num);
+                let text_color = get_contrast_text_color(*r, *g, *b);
+                print!(
+                    " {}\x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ",
+                    text_color, r, g, b, num
+                );
             } else {
                 print!("{}", empty_cell);
             }
@@ -440,7 +468,7 @@ fn process_barrels(
                         ..settings.human_like_movement.max_down_ms,
                 )));
             } else {
-                thread::sleep(Duration::from_millis(rng.gen_range(5..15)));
+                thread::sleep(Duration::from_millis(rng.gen_range(15..17)));
             }
 
             // Нажимаем кнопку мыши
@@ -453,20 +481,20 @@ fn process_barrels(
                         ..settings.human_like_movement.max_move_delay_ms,
                 )));
             } else {
-                thread::sleep(Duration::from_millis(rng.gen_range(5..12)));
+                thread::sleep(Duration::from_millis(rng.gen_range(15..17)));
             }
 
             // Перемещаемся к конечной точке
             human_like_move(abs_to_x, abs_to_y, &settings.human_like_movement)?;
 
             // Небольшая пауза перед отпусканием
-            thread::sleep(Duration::from_millis(rng.gen_range(8..12)));
+            thread::sleep(Duration::from_millis(rng.gen_range(20..25)));
             if settings.human_like_movement.enabled {
                 thread::sleep(Duration::from_millis(rng.gen_range(
                     settings.human_like_movement.min_up_ms..settings.human_like_movement.max_up_ms,
                 )));
             } else {
-                thread::sleep(Duration::from_millis(rng.gen_range(8..12)));
+                thread::sleep(Duration::from_millis(rng.gen_range(20..25)));
             }
 
             // Отпускаем кнопку мыши
@@ -488,6 +516,7 @@ fn process_barrels(
             });
 
             merged = true;
+            thread::sleep(Duration::from_millis(rng.gen_range(5..10)));
         }
     }
 
@@ -529,10 +558,7 @@ fn main() -> AppResult<()> {
     }
 
     // Инициализируем начальный диапазон
-    detector.active_range = (
-        0,
-        50,
-    ); // Начинаем с Empty + первые 5 бочек
+    detector.active_range = (0, 50); // Начинаем с Empty + первые 5 бочек
     let mut last_frame_time = std::time::Instant::now();
     let mut fps = 0.0;
     loop {
@@ -753,14 +779,14 @@ fn main() -> AppResult<()> {
             };
 
             // Вычисляем шаг для зигзага (примерно 1/8 высоты окна)
-            let step_height = window_height / 11;
+            let step_height = window_height / 15;
 
-            // Создаем зигзагообразный маршрут от верха до низа окна
-            let mut current_y = window_y + 50 + step_height;
+            // Начинаем снизу окна
+            let mut current_y = window_y + window_height - 80 - step_height;
             let left_x = window_x + (4 + settings.random_offset.max_x_offset);
             let right_x = window_x + window_width - (4 + settings.random_offset.max_x_offset);
 
-            // 1. Перемещаемся к начальной точке (левый верхний угол) с human-like движением
+            // 1. Перемещаемся к начальной точке (левый нижний угол)
             human_like_move(left_x, current_y, &fast_movement_settings)?;
             for i in 0..5 {
                 drop_positions[i as usize] = (i * 3) % (line_length - 4);
@@ -771,8 +797,8 @@ fn main() -> AppResult<()> {
             // 2. Нажимаем кнопку мыши
             Command::new("xdotool").args(&["mousedown", "1"]).status()?;
 
-            while current_y < window_y + window_height - 80 - step_height {
-                // Движение вправо - с human-like движением
+            while current_y > window_y + 50 + step_height {
+                // Движение вправо
                 human_like_move(right_x, current_y, &fast_movement_settings)?;
                 for i in 0..5 {
                     drop_positions[i as usize] =
@@ -781,8 +807,8 @@ fn main() -> AppResult<()> {
                 draw_cloud(&drop_positions, true);
                 thread::sleep(Duration::from_millis(1));
 
-                // Движение вниз - прямое перемещение без human-like
-                current_y += step_height;
+                // Движение вверх
+                current_y -= step_height;
                 Command::new("xdotool")
                     .args(&["mousemove", &right_x.to_string(), &current_y.to_string()])
                     .status()?;
@@ -793,7 +819,7 @@ fn main() -> AppResult<()> {
                 draw_cloud(&drop_positions, true);
                 thread::sleep(Duration::from_millis(1));
 
-                // Движение влево - с human-like движением
+                // Движение влево
                 human_like_move(left_x, current_y, &fast_movement_settings)?;
                 for i in 0..5 {
                     drop_positions[i as usize] =
@@ -802,9 +828,9 @@ fn main() -> AppResult<()> {
                 draw_cloud(&drop_positions, false);
                 thread::sleep(Duration::from_millis(1));
 
-                // Движение вниз (если не вышли за границы) - прямое перемещение без human-like
-                if current_y < window_y + window_height - step_height {
-                    current_y += step_height;
+                // Движение вверх (если не вышли за границы)
+                if current_y > window_y + step_height {
+                    current_y -= step_height;
                     Command::new("xdotool")
                         .args(&["mousemove", &left_x.to_string(), &current_y.to_string()])
                         .status()?;
