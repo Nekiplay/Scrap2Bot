@@ -114,7 +114,6 @@ fn main() -> AppResult<()> {
     // Инициализируем начальный диапазон
     detector.active_range = (0, 50); // Начинаем с Empty + первые 5 бочек
     let mut last_frame_time = std::time::Instant::now();
-    let mut fps = 0.0;
     loop {
         let screenshot_path = "screenshot.png";
         let (window_x, window_y) =
@@ -137,7 +136,7 @@ fn main() -> AppResult<()> {
 
         let current_time = std::time::Instant::now();
         let frame_time = current_time.duration_since(last_frame_time).as_secs_f64();
-        fps = 0.9 * fps + 0.1 * (1.0 / frame_time); // Сглаживание FPS
+        let fps = 1.0 / frame_time;
         last_frame_time = current_time;
 
         if debug_mode {

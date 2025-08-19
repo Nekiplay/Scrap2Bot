@@ -99,78 +99,80 @@ pub fn display_results_as_table(
     fps: f64,
 ) {
     if detections.is_empty() {
-        print!("No objects detected\n");
+        println!("No objects detected");
         return;
     }
 
-    // Находим минимальные и максимальные координаты
-    let min_x = detections.iter().map(|d| d.location.x).min().unwrap_or(0);
-    let max_x = detections.iter().map(|d| d.location.x).max().unwrap_or(0);
-    let min_y = detections.iter().map(|d| d.location.y).min().unwrap_or(0);
-    let max_y = detections.iter().map(|d| d.location.y).max().unwrap_or(0);
+    // Фильтруем только бочки (Barrel) и игнорируем Empty, Event и другие не-бочки
+    let barrels: Vec<&DetectionResult> = detections
+        .iter()
+        .filter(|d| d.object_name.starts_with("Barrel"))
+        .collect();
 
-    // Вычисляем ширину и высоту ячейки
-    let cell_width = (max_x - min_x) as f32 / (cols - 1) as f32;
-    let cell_height = (max_y - min_y) as f32 / (rows - 1) as f32;
+    if barrels.is_empty() {
+        println!("No barrels detected");
+        return;
+    }
 
-    // Создаем таблицу с дополнительной информацией о цвете
-    let mut table: Vec<Vec<Option<(u32, (f32, f32, f32))>>> = vec![vec![None; cols]; rows];
+    // Создаем таблицу для игрового поля
+    let mut game_field: Vec<Vec<Option<(u32, (f32, f32, f32))>>> = vec![vec![None; cols]; rows];
 
-    // Заполняем таблицу
-    for detection in detections {
-        let col = ((detection.location.x - min_x) as f32 / cell_width).round() as usize;
-        let row = ((detection.location.y - min_y) as f32 / cell_height).round() as usize;
+    // Находим границы только бочек
+    let min_x = barrels.iter().map(|d| d.location.x).min().unwrap_or(0);
+    let max_x = barrels.iter().map(|d| d.location.x).max().unwrap_or(0);
+    let min_y = barrels.iter().map(|d| d.location.y).min().unwrap_or(0);
+    let max_y = barrels.iter().map(|d| d.location.y).max().unwrap_or(0);
 
-        let number = detection
+    // Вычисляем размеры ячейки
+    let cell_width = ((max_x - min_x) as f32 / cols as f32).max(1.0);
+    let cell_height = ((max_y - min_y) as f32 / rows as f32).max(1.0);
+
+    // Заполняем игровое поле только бочками
+    for barrel in &barrels {
+        let col = ((barrel.location.x - min_x) as f32 / cell_width) as usize;
+        let row = ((barrel.location.y - min_y) as f32 / cell_height) as usize;
+
+        // Ограничиваем индексы размерами таблицы
+        let col = col.min(cols - 1);
+        let row = row.min(rows - 1);
+
+        let number = barrel
             .object_name
             .chars()
             .filter_map(|c| c.to_digit(10))
             .fold(0, |acc, digit| acc * 10 + digit);
 
-        if row < rows && col < cols {
-            if let Some(template) = templates.iter().find(|t| t.name == detection.object_name) {
-                table[row][col] = Some((number, (template.red, template.green, template.blue)));
-            }
+        if let Some(template) = templates.iter().find(|t| t.name == barrel.object_name) {
+            game_field[row][col] = Some((number, (template.red, template.green, template.blue)));
         }
     }
 
-    // Фильтруем бочки и собираем в новый Vec
-    let barrels: Vec<DetectionResult> = detections
-        .iter()
-        .filter(|d| d.object_name.starts_with("Barrel"))
-        .cloned()
-        .collect();
-    let (min_lvl, max_lvl, merges_remaining) = calculate_required_merges(&barrels);
+    let (min_lvl, max_lvl, merges_remaining) = calculate_required_merges(
+        &barrels.iter().map(|b| (*b).clone()).collect::<Vec<DetectionResult>>()
+    );
 
-    // Table drawing with fixed cell width
-    let cell_width = 5;
-    let empty_cell = format!(" {:^3} ", ""); // Centered empty cell
+    // Отображаем таблицу
+    let cell_display_width = 5;
+    let empty_cell = "     "; // 5 пробелов
 
-    // Print table header (исправлено: убрано дублирование)
+    // Заголовок таблицы
     print!("╔");
     for c in 0..cols {
-        print!("{}", "═".repeat(cell_width));
+        print!("{}", "═".repeat(cell_display_width));
         if c < cols - 1 {
             print!("╦");
         }
     }
     println!("╗");
 
-    // Print table rows
-    for row in 0..rows - 1 {
-        // Изменено: rows-1 чтобы последняя строка обрабатывалась отдельно
+    // Строки таблицы
+    for row in 0..rows {
         print!("║");
         for col in 0..cols {
-            if let Some((num, (r, g, b))) = &table[row][col] {
-                if *num != 0 {
-                    let text_color = get_contrast_text_color(*r, *g, *b);
-                    print!(
-                        " {}\x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ",
-                        text_color, r, g, b, num
-                    );
-                } else {
-                    print!("{}", empty_cell);
-                }
+            if let Some((num, (r, g, b))) = &game_field[row][col] {
+                let text_color = get_contrast_text_color(*r, *g, *b);
+                print!("{} \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ", 
+                       text_color, r, g, b, num);
             } else {
                 print!("{}", empty_cell);
             }
@@ -178,57 +180,39 @@ pub fn display_results_as_table(
         }
         println!();
 
-        // Print row separator
-        print!("╠");
-        for c in 0..cols {
-            print!("{}", "═".repeat(cell_width));
-            if c < cols - 1 {
-                print!("╬");
+        // Разделитель строк (кроме последней)
+        if row < rows - 1 {
+            print!("╠");
+            for c in 0..cols {
+                print!("{}", "═".repeat(cell_display_width));
+                if c < cols - 1 {
+                    print!("╬");
+                }
             }
+            println!("╣");
         }
-        println!("╣");
     }
 
-    // Print last row with FPS (исправлено: убрано дублирование последней строки)
-    print!("║");
-    for col in 0..cols {
-        if let Some((num, (r, g, b))) = &table[rows - 1][col] {
-            if *num != 0 {
-                let text_color = get_contrast_text_color(*r, *g, *b);
-                print!(
-                    " {}\x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ",
-                    text_color, r, g, b, num
-                );
-            } else {
-                print!("{}", empty_cell);
-            }
-        } else {
-            print!("{}", empty_cell);
-        }
-        print!("║");
-    }
-    println!(" {:.0}fps", fps);
-
-    // Print table footer with detection time
+    // Нижняя граница таблицы
     print!("╚");
     for c in 0..cols {
-        print!("{}", "═".repeat(cell_width));
+        print!("{}", "═".repeat(cell_display_width));
         if c < cols - 1 {
             print!("╩");
         }
     }
-    println!("╝ {}ms", detection_time);
+    println!("╝ {}ms | {:.0}fps", detection_time, fps);
 
-    // Statistics section
-    let min_w = 5; // Ширина для min_lvl
-    let max_w = 5; // Ширина для max_lvl
-    let target_w = 5; // Ширина для target
-    let merges_w = 10; // Увеличил ширину для merges_remaining 
-    let total_width = min_w + max_w + target_w + merges_w + 5; // 3 пробела между колонками
+    // Статистика
+    let min_w = 5;
+    let max_w = 5;
+    let target_w = 5;
+    let merges_w = 10;
+    let total_width = min_w + max_w + target_w + merges_w + 3;
 
     println!("╔{}╗", "═".repeat(total_width));
     println!(
-        "║ {:^min_w$} {:^max_w$} {:^target_w$} {:>merges_w$} ║",
+        "║{:^min_w$} {:^max_w$} {:^target_w$} {:>merges_w$}║",
         format!("⭣{}", min_lvl),
         format!("⭡{}", max_lvl),
         format!("⭢{}", max_lvl + 1),
