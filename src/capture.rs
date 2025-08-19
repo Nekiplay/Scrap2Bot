@@ -165,6 +165,34 @@ pub fn get_window_size(window_title: &str) -> AppResult<(i32, i32)> {
     Ok((width, height))
 }
 
+pub fn is_cursor_in_window(
+    window_x: i32,
+    window_y: i32,
+    window_width: i32,
+    window_height: i32,
+) -> AppResult<bool> {
+    let output = Command::new("xdotool")
+        .args(&["getmouselocation", "--shell"])
+        .output()?;
+
+    let output_str = String::from_utf8(output.stdout)?;
+    let mut cursor_x = 0;
+    let mut cursor_y = 0;
+
+    for line in output_str.lines() {
+        if line.starts_with("X=") {
+            cursor_x = line[2..].parse().unwrap_or(0);
+        } else if line.starts_with("Y=") {
+            cursor_y = line[2..].parse().unwrap_or(0);
+        }
+    }
+
+    Ok(cursor_x >= window_x
+        && cursor_x <= window_x + window_width
+        && cursor_y >= window_y
+        && cursor_y <= window_y + window_height)
+}
+
 pub fn parse_window_id(geometry_output: &str) -> AppResult<u32> {
     geometry_output
         .lines()

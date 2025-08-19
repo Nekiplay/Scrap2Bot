@@ -12,6 +12,24 @@ pub struct Settings {
     pub templates: Vec<TemplateSettings>,
     pub random_offset: RandomOffsetSettings,
     pub human_like_movement: HumanLikeMovementSettings,
+    pub automation: Automation,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Automation {
+    pub merge: Merge,
+    pub shtorm: Shtorm,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Merge {
+    pub enabled: bool,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Shtorm {
+    pub enabled: bool,
+    pub retries: usize,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -48,4 +66,6 @@ pub struct TemplateSettings {
     pub green: f32,
     pub blue: f32,
     pub resolution: Option<f64>,
+    #[serde(default)]
+    pub always_active: bool,
 }
