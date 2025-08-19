@@ -1,3 +1,4 @@
+use crate::utils::extract_barrel_number;
 use opencv::Result as OpenCVResult;
 use opencv::core::AlgorithmHint;
 use opencv::core::CV_8U;
@@ -237,107 +238,105 @@ impl ObjectDetector {
         }
     }
 
-    pub fn update_active_range(&mut self, detected_numbers: &[u32]) {
-        if detected_numbers.is_empty() {
-            // If nothing is detected, use full range but ensure it's within bounds
+    pub fn update_active_range(&mut self, detections: &[DetectionResult]) {
+        // Фильтруем обнаружения чтобы убрать мусорные значения
+        let filtered_detections = self.filter_close_detections(detections.to_vec());
+
+        // Фильтруем только бочки и извлекаем их номера
+        let barrel_numbers: Vec<u32> = filtered_detections
+            .iter()
+            .filter(|d| d.object_name.starts_with("Barrel"))
+            .filter_map(|d| extract_barrel_number(&d.object_name))
+            .collect();
+
+        //println!("DEBUG: Barrel numbers detected: {:?}", barrel_numbers);
+
+        if barrel_numbers.is_empty() {
             self.active_range = (0, self.templates.len().saturating_sub(1));
             self.full_range = true;
+            //println!("DEBUG: No barrels detected, using full range");
             return;
         }
 
-        // If was full range and something found - switch to targeted range
-        if self.full_range {
-            let min_detected = *detected_numbers.iter().min().unwrap();
-            let max_detected = *detected_numbers.iter().max().unwrap();
+        let min_detected = *barrel_numbers.iter().min().unwrap();
+        let max_detected = *barrel_numbers.iter().max().unwrap();
+        //println!(
+        //    "DEBUG: Min barrel: {}, Max barrel: {}",
+        //    min_detected, max_detected
+        //);
 
-            // Define new range with buffer
-            let new_min = min_detected.saturating_sub(5); // +5 previous levels
-            let new_max = max_detected + 8; // +8 next levels
+        // Calculate the desired number range
+        let target_min_number = min_detected.saturating_sub(5); // 303 - 5 = 298
+        let target_max_number = max_detected + 8; // 371 + 8 = 379
 
-            // Find template indices for new range
-            let mut start = 0;
-            let mut end = self.templates.len().saturating_sub(1);
+        //println!(
+        //    "DEBUG: Target number range: {} - {}",
+        //    target_min_number, target_max_number
+        //);
 
-            for (i, template) in self.templates.iter().enumerate() {
-                if let Some(num) = template
-                    .name
-                    .split_whitespace()
-                    .last()
-                    .and_then(|s| s.parse::<u32>().ok())
-                {
-                    if num >= new_min && num <= new_max {
-                        if i < start || start == 0 {
-                            start = i;
-                        }
-                        if i > end || end == self.templates.len().saturating_sub(1) {
-                            end = i;
-                        }
-                    }
+        // Find template indices that match this number range
+        let mut start_index = None;
+        let mut end_index = None;
+
+        // Find start index (first template with number >= target_min_number)
+        for (i, template) in self.templates.iter().enumerate() {
+            if let Some(number) = extract_barrel_number(&template.name) {
+                if number >= target_min_number {
+                    start_index = Some(i);
+                    break;
                 }
             }
+        }
 
-            // Ensure the range is valid
-            self.active_range = (
-                start.min(self.templates.len().saturating_sub(1)),
-                end.min(self.templates.len().saturating_sub(1)),
-            );
+        // Find end index (last template with number <= target_max_number)
+        for (i, template) in self.templates.iter().enumerate().rev() {
+            if let Some(number) = extract_barrel_number(&template.name) {
+                if number <= target_max_number {
+                    end_index = Some(i);
+                    break;
+                }
+            }
+        }
+
+        // If found valid range, set it
+        if let (Some(start), Some(end)) = (start_index, end_index) {
+            self.active_range = (start, end);
             self.full_range = false;
+
+            // Get actual numbers for the range boundaries
+            //let actual_min = extract_barrel_number(&self.templates[start].name).unwrap();
+            //let actual_max = extract_barrel_number(&self.templates[end].name).unwrap();
+
+            //println!(
+            //    "DEBUG: Active range set: indices {} - {} (numbers {} - {})",
+            //    start, end, actual_min, actual_max
+            //);
         } else {
-            // If already in targeted range - adjust it smoothly
-            let min_detected = *detected_numbers.iter().min().unwrap();
-            let max_detected = *detected_numbers.iter().max().unwrap();
-
-            // Current bounds
-            let (current_start, current_end) = self.active_range;
-
-            // New bounds with buffer
-            let new_min = min_detected.saturating_sub(3) as usize;
-            let new_max = (max_detected + 3) as usize;
-
-            // Smooth range expansion
-            let new_start = if new_min < current_start {
-                new_min
-            } else {
-                current_start
-            };
-            let new_end = if new_max > current_end {
-                new_max
-            } else {
-                current_end
-            };
-
-            // Ensure the range is valid
-            self.active_range = (
-                new_start.min(self.templates.len().saturating_sub(1)),
-                new_end.min(self.templates.len().saturating_sub(1)),
-            );
+            // Fallback to full range
+            self.active_range = (0, self.templates.len().saturating_sub(1));
+            self.full_range = true;
+            //println!("DEBUG: Could not find matching templates, using full range");
         }
     }
 
     pub fn get_active_templates(&self) -> Vec<Arc<ObjectTemplate>> {
         let mut result = Vec::new();
 
-        // Добавляем шаблоны с флагом always_active
+        // Всегда добавляем шаблоны с флагом always_active
         for template in &self.templates {
-            if template.always_active
-                && !result
-                    .iter()
-                    .any(|t: &Arc<ObjectTemplate>| t.name == template.name)
-            {
+            if template.always_active {
                 result.push(template.clone());
             }
         }
 
-        // Добавляем шаблоны из активного диапазона (исключая уже добавленные)
+        // Добавляем шаблоны из активного диапазона (исключая уже добавленные always_active)
         let (start, end) = self.active_range;
         for i in start..=end {
-            if i < self.templates.len()
-                && !self.templates[i].always_active
-                && !result
-                    .iter()
-                    .any(|t: &Arc<ObjectTemplate>| t.name == self.templates[i].name)
-            {
-                result.push(self.templates[i].clone());
+            if i < self.templates.len() && !self.templates[i].always_active {
+                // Проверяем, что шаблон еще не добавлен (по имени)
+                if !result.iter().any(|t| t.name == self.templates[i].name) {
+                    result.push(self.templates[i].clone());
+                }
             }
         }
 
@@ -546,18 +545,13 @@ impl ObjectDetector {
         let elapsed = start_time.elapsed();
         let elapsed_ms = elapsed.as_millis();
 
-        let detected_numbers: Vec<u32> = all_results
-            .iter()
-            .flatten()
-            .filter_map(|d| {
-                d.object_name
-                    .split_whitespace()
-                    .last()
-                    .and_then(|s| s.parse().ok())
-            })
-            .collect();
-
-        self.update_active_range(&detected_numbers);
+        self.update_active_range(
+            &all_results
+                .clone()
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>(),
+        );
 
         Ok((
             self.filter_close_detections(all_results.into_iter().flatten().collect()),
@@ -616,26 +610,7 @@ impl ObjectDetector {
                 let elapsed = start_time.elapsed();
                 let elapsed_ms = elapsed.as_millis();
 
-                print!("\x1B[2J\x1B[3J\x1B[H");
-                io::stdout().flush().map_err(|e| {
-                    opencv::Error::new(
-                        opencv::core::StsError,
-                        format!("Failed to flush stdout: {}", e),
-                    )
-                })?;
-
-                let detected_numbers: Vec<u32> = all_results
-                    .iter()
-                    .flatten()
-                    .filter_map(|d| {
-                        d.object_name
-                            .split_whitespace()
-                            .last()
-                            .and_then(|s| s.parse().ok())
-                    })
-                    .collect();
-
-                self.update_active_range(&detected_numbers);
+                self.update_active_range(&all_results.clone().into_iter().flatten().collect::<Vec<_>>());
 
                 Ok((
                     self.filter_close_detections(all_results.into_iter().flatten().collect()),
