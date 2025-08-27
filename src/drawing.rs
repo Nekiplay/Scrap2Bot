@@ -60,9 +60,9 @@ pub fn draw_cloud(drop_positions: &[usize], is_moving_right: bool, line_length: 
 
     // Статус с правильным выравниванием
     let status = if is_moving_right {
-        "\x1B[36mCollecting magnets >>\x1B[0m"
+        "\x1B[36mCollecting shtorm >>\x1B[0m"
     } else {
-        "\x1B[36mCollecting magnets <<\x1B[0m"
+        "\x1B[36mCollecting shtorm <<\x1B[0m"
     };
 
     // Удаляем escape-последовательности для расчета ширины
@@ -162,7 +162,10 @@ pub fn display_results_as_table(
     }
 
     let (min_lvl, max_lvl, merges_remaining) = calculate_required_merges(
-        &barrels.iter().map(|b| (*b).clone()).collect::<Vec<DetectionResult>>()
+        &barrels
+            .iter()
+            .map(|b| (*b).clone())
+            .collect::<Vec<DetectionResult>>(),
     );
 
     // Table drawing with fixed cell width
@@ -186,8 +189,10 @@ pub fn display_results_as_table(
             if let Some((num, (r, g, b))) = &table[row][col] {
                 if *num != 0 {
                     let text_color = get_contrast_text_color(*r, *g, *b);
-                    print!("{} \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ", 
-                           text_color, r, g, b, num);
+                    print!(
+                        "{} \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ",
+                        text_color, r, g, b, num
+                    );
                 } else {
                     print!("{}", empty_cell);
                 }
@@ -215,8 +220,10 @@ pub fn display_results_as_table(
         if let Some((num, (r, g, b))) = &table[rows - 1][col] {
             if *num != 0 {
                 let text_color = get_contrast_text_color(*r, *g, *b);
-                print!("{} \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ", 
-                       text_color, r, g, b, num);
+                print!(
+                    "{} \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ",
+                    text_color, r, g, b, num
+                );
             } else {
                 print!("{}", empty_cell);
             }
