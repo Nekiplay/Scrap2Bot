@@ -31,6 +31,9 @@
     "shtorm": {
       "enabled": true,
       "retries": 32
+    },
+    "fragments": {
+        "enabled": false
     }
   },
   "convert_to_grayscale": false,
@@ -39,7 +42,7 @@
         {
             "name": "Cloud",
             "path": "templates/ui/cloud.png",
-            "threshold": 0.87,
+            "threshold": 0.80,
             "min_distance": 15.0,
             "red": 105,
             "green": 105,
@@ -50,6 +53,16 @@
             "name": "Event",
             "path": "templates/ui/event.png",
             "threshold": 0.7,
+            "min_distance": 15.0,
+            "red": 105,
+            "green": 105,
+            "blue": 105,
+            "always_active": true
+        },
+        {
+            "name": "Close",
+            "path": "templates/ui/close.png",
+            "threshold": 0.75,
             "min_distance": 15.0,
             "red": 105,
             "green": 105,
@@ -2972,6 +2985,456 @@
             "red": 199,
             "green": 137,
             "blue": 31
+        },
+        {
+            "name": "Barrel 388",
+            "path": "templates/barrels/388.png",
+            "threshold": 0.85,
+            "min_distance": 15.0,
+            "red": 255,
+            "green": 171,
+            "blue": 139
+        },
+        {
+            "name": "Barrel 389",
+            "path": "templates/barrels/389.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 131,
+            "green": 221,
+            "blue": 12
+        },
+        {
+            "name": "Barrel 390",
+            "path": "templates/barrels/390.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 227,
+            "green": 219,
+            "blue": 133
+        },
+        {
+            "name": "Barrel 391",
+            "path": "templates/barrels/391.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 126,
+            "green": 72,
+            "blue": 46
+        },
+        {
+            "name": "Barrel 392",
+            "path": "templates/barrels/392.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 56,
+            "green": 29,
+            "blue": 89
+        },
+        {
+            "name": "Barrel 393",
+            "path": "templates/barrels/393.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 53,
+            "green": 128,
+            "blue": 38
+        },
+        {
+            "name": "Barrel 394",
+            "path": "templates/barrels/394.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 237,
+            "green": 129,
+            "blue": 57
+        },
+        {
+            "name": "Barrel 395",
+            "path": "templates/barrels/395.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 13,
+            "green": 167,
+            "blue": 184
+        },
+        {
+            "name": "Barrel 396",
+            "path": "templates/barrels/396.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 29,
+            "green": 111,
+            "blue": 29
+        },
+        {
+            "name": "Barrel 397",
+            "path": "templates/barrels/397.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 149,
+            "green": 149,
+            "blue": 149
+        },
+        {
+            "name": "Barrel 398",
+            "path": "templates/barrels/398.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 54,
+            "green": 83,
+            "blue": 90
+        },
+        {
+            "name": "Barrel 399",
+            "path": "templates/barrels/399.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 212,
+            "green": 208,
+            "blue": 211
+        },
+        {
+            "name": "Barrel 400",
+            "path": "templates/barrels/400.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 71,
+            "green": 42,
+            "blue": 138
+        },
+        {
+            "name": "Barrel 401",
+            "path": "templates/barrels/401.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 231,
+            "green": 207,
+            "blue": 107
+        },
+        {
+            "name": "Barrel 402",
+            "path": "templates/barrels/402.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 161,
+            "green": 212,
+            "blue": 38
+        },
+        {
+            "name": "Barrel 403",
+            "path": "templates/barrels/403.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 166,
+            "green": 136,
+            "blue": 116
+        },
+        {
+            "name": "Barrel 404",
+            "path": "templates/barrels/404.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 234,
+            "green": 189,
+            "blue": 96
+        },
+        {
+            "name": "Barrel 405",
+            "path": "templates/barrels/405.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 130,
+            "green": 215,
+            "blue": 203
+        },
+        {
+            "name": "Barrel 406",
+            "path": "templates/barrels/406.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 102,
+            "green": 47,
+            "blue": 15
+        },
+        {
+            "name": "Barrel 407",
+            "path": "templates/barrels/407.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 107,
+            "green": 107,
+            "blue": 107
+        },
+        {
+            "name": "Barrel 408",
+            "path": "templates/barrels/408.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 229,
+            "green": 197,
+            "blue": 23
+        },
+        {
+            "name": "Barrel 409",
+            "path": "templates/barrels/409.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 147,
+            "green": 125,
+            "blue": 16
+        },
+        {
+            "name": "Barrel 410",
+            "path": "templates/barrels/410.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 157,
+            "green": 15,
+            "blue": 60
+        },
+        {
+            "name": "Barrel 411",
+            "path": "templates/barrels/411.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 102,
+            "green": 43,
+            "blue": 129
+        },
+        {
+            "name": "Barrel 412",
+            "path": "templates/barrels/412.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 15,
+            "green": 166,
+            "blue": 238
+        },
+        {
+            "name": "Barrel 413",
+            "path": "templates/barrels/413.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 189,
+            "green": 191,
+            "blue": 191
+        },
+        {
+            "name": "Barrel 414",
+            "path": "templates/barrels/414.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 42,
+            "green": 87,
+            "blue": 134
+        },
+        {
+            "name": "Barrel 415",
+            "path": "templates/barrels/415.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 169,
+            "green": 163,
+            "blue": 75
+        },
+        {
+            "name": "Barrel 416",
+            "path": "templates/barrels/416.png",
+            "threshold": 0.85,
+            "min_distance": 15.0,
+            "red": 46,
+            "green": 46,
+            "blue": 46
+        },
+        {
+            "name": "Barrel 417",
+            "path": "templates/barrels/417.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 201,
+            "green": 117,
+            "blue": 29
+        },
+        {
+            "name": "Barrel 418",
+            "path": "templates/barrels/418.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 61,
+            "green": 229,
+            "blue": 82
+        },
+        {
+            "name": "Barrel 419",
+            "path": "templates/barrels/419.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 219,
+            "green": 97,
+            "blue": 203
+        },
+        {
+            "name": "Barrel 420",
+            "path": "templates/barrels/420.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 146,
+            "green": 240,
+            "blue": 56
+        },
+        {
+            "name": "Barrel 421",
+            "path": "templates/barrels/421.png",
+            "threshold": 0.85,
+            "min_distance": 15.0,
+            "red": 59,
+            "green": 35,
+            "blue": 21
+        },
+        {
+            "name": "Barrel 422",
+            "path": "templates/barrels/422.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 164,
+            "green": 120,
+            "blue": 86
+        },
+        {
+            "name": "Barrel 423",
+            "path": "templates/barrels/423.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 192,
+            "green": 180,
+            "blue": 51
+        },
+        {
+            "name": "Barrel 424",
+            "path": "templates/barrels/424.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 147,
+            "green": 107,
+            "blue": 49
+        },
+        {
+            "name": "Barrel 425",
+            "path": "templates/barrels/425.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 103,
+            "green": 244,
+            "blue": 205
+        },
+        {
+            "name": "Barrel 426",
+            "path": "templates/barrels/426.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 220,
+            "green": 168,
+            "blue": 31
+        },
+        {
+            "name": "Barrel 427",
+            "path": "templates/barrels/427.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 154,
+            "green": 154,
+            "blue": 154
+        },
+        {
+            "name": "Barrel 428",
+            "path": "templates/barrels/428.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 31,
+            "green": 17,
+            "blue": 48
+        },
+        {
+            "name": "Barrel 429",
+            "path": "templates/barrels/429.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 214,
+            "green": 141,
+            "blue": 22
+        },
+        {
+            "name": "Barrel 430",
+            "path": "templates/barrels/430.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 112,
+            "green": 46,
+            "blue": 30
+        },
+        {
+            "name": "Barrel 431",
+            "path": "templates/barrels/431.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 109,
+            "green": 180,
+            "blue": 75
+        },
+        {
+            "name": "Barrel 432",
+            "path": "templates/barrels/432.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 61,
+            "green": 61,
+            "blue": 61
+        },
+        {
+            "name": "Barrel 433",
+            "path": "templates/barrels/433.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 148,
+            "green": 184,
+            "blue": 15
+        },
+        {
+            "name": "Barrel 434",
+            "path": "templates/barrels/434.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 230,
+            "green": 221,
+            "blue": 174
+        },
+        {
+            "name": "Barrel 435",
+            "path": "templates/barrels/435.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 170,
+            "green": 118,
+            "blue": 86
+        },
+        {
+            "name": "Barrel 436",
+            "path": "templates/barrels/436.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 78,
+            "green": 82,
+            "blue": 101
+        },
+        {
+            "name": "Barrel 437",
+            "path": "templates/barrels/437.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 149,
+            "green": 121,
+            "blue": 238
         }
     ]
 }
