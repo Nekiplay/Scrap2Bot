@@ -30,7 +30,7 @@
     },
     "shtorm": {
       "enabled": true,
-      "retries": 32
+      "retries": 5
     },
     "fragments": {
         "enabled": false
@@ -42,8 +42,8 @@
         {
             "name": "Cloud",
             "path": "templates/ui/cloud.png",
-            "threshold": 0.80,
-            "min_distance": 15.0,
+            "threshold": 0.85,
+            "min_distance": 5.0,
             "red": 105,
             "green": 105,
             "blue": 105,
@@ -53,16 +53,6 @@
             "name": "Event",
             "path": "templates/ui/event.png",
             "threshold": 0.7,
-            "min_distance": 15.0,
-            "red": 105,
-            "green": 105,
-            "blue": 105,
-            "always_active": true
-        },
-        {
-            "name": "Close",
-            "path": "templates/ui/close.png",
-            "threshold": 0.75,
             "min_distance": 15.0,
             "red": 105,
             "green": 105,
@@ -3435,6 +3425,114 @@
             "red": 149,
             "green": 121,
             "blue": 238
+        },
+        {
+            "name": "Barrel 438",
+            "path": "templates/barrels/438.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 206,
+            "green": 229,
+            "blue": 235
+        },
+        {
+            "name": "Barrel 439",
+            "path": "templates/barrels/439.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 26,
+            "green": 101,
+            "blue": 27
+        },
+        {
+            "name": "Barrel 440",
+            "path": "templates/barrels/440.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 216,
+            "green": 152,
+            "blue": 51
+        },
+        {
+            "name": "Barrel 441",
+            "path": "templates/barrels/441.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 0,
+            "green": 96,
+            "blue": 145
+        },
+        {
+            "name": "Barrel 442",
+            "path": "templates/barrels/442.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 63,
+            "green": 94,
+            "blue": 15
+        },
+        {
+            "name": "Barrel 443",
+            "path": "templates/barrels/443.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 65,
+            "green": 61,
+            "blue": 58
+        },
+        {
+            "name": "Barrel 444",
+            "path": "templates/barrels/444.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 172,
+            "green": 19,
+            "blue": 18
+        },
+        {
+            "name": "Barrel 445",
+            "path": "templates/barrels/445.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 199,
+            "green": 175,
+            "blue": 116
+        },
+        {
+            "name": "Barrel 446",
+            "path": "templates/barrels/446.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 142,
+            "green": 142,
+            "blue": 142
+        },
+        {
+            "name": "Barrel 447",
+            "path": "templates/barrels/447.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 50,
+            "green": 100,
+            "blue": 90
+        },
+        {
+            "name": "Barrel 448",
+            "path": "templates/barrels/448.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 177,
+            "green": 178,
+            "blue": 178
+        },
+        {
+            "name": "Barrel 449",
+            "path": "templates/barrels/449.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 222,
+            "green": 58,
+            "blue": 109
         }
     ]
 }

@@ -202,7 +202,7 @@ pub fn process_barrels(
                 } else {
                     thread::sleep(Duration::from_millis(rng.gen_range(15..17)));
                 }
-
+                human_like_move(abs_from_x, abs_from_y, &settings.human_like_movement)?;
                 // Нажимаем кнопку мыши
                 Command::new("xdotool").args(&["mousedown", "1"]).status()?;
 
@@ -213,24 +213,25 @@ pub fn process_barrels(
                             ..settings.human_like_movement.max_move_delay_ms,
                     )));
                 } else {
-                    thread::sleep(Duration::from_millis(rng.gen_range(15..17)));
+                    thread::sleep(Duration::from_millis(rng.gen_range(5..7)));
                 }
 
                 // Перемещаемся к конечной точке
                 human_like_move(abs_to_x, abs_to_y, &settings.human_like_movement)?;
 
                 // Небольшая пауза перед отпусканием
-                thread::sleep(Duration::from_millis(rng.gen_range(20..25)));
+                thread::sleep(Duration::from_millis(rng.gen_range(15..16)));
                 if settings.human_like_movement.enabled {
                     thread::sleep(Duration::from_millis(rng.gen_range(
                         settings.human_like_movement.min_up_ms
                             ..settings.human_like_movement.max_up_ms,
                     )));
                 } else {
-                    thread::sleep(Duration::from_millis(rng.gen_range(20..25)));
+                    thread::sleep(Duration::from_millis(rng.gen_range(16..17)));
                 }
 
                 // Отпускаем кнопку мыши
+                human_like_move(abs_to_x, abs_to_y, &settings.human_like_movement)?;
                 Command::new("xdotool").args(&["mouseup", "1"]).status()?;
 
                 // Сохраняем новую бочку
@@ -240,7 +241,7 @@ pub fn process_barrels(
                     confidence: to.confidence.clone(),
                 });
 
-                thread::sleep(Duration::from_millis(rng.gen_range(5..10)));
+                thread::sleep(Duration::from_millis(rng.gen_range(12..13)));
             }
 
             // Теперь добавляем все несмерженные бочки
@@ -286,10 +287,10 @@ pub fn process_magnets_cloud(
         enabled: true,
         max_deviation: 0.000001,
         speed_variation: 0.000001,
-        curve_smoothness: 15,
+        curve_smoothness: 8,
         min_pause_ms: 0,
         max_pause_ms: 1,
-        base_speed: 0.000001,
+        base_speed: 0.00000001,
         min_down_ms: 0,
         max_down_ms: 1,
         min_up_ms: 0,
@@ -304,12 +305,12 @@ pub fn process_magnets_cloud(
     let mut drop_positions = vec![0usize; 5]; // Позиции 5 капель
 
     // Вычисляем шаг для зигзага (примерно 1/8 высоты окна)
-    let step_height = window_height / 11;
+    let step_height = window_height / 22;
 
     // Создаем зигзагообразный маршрут от верха до низа окна
     let mut current_y = window_y + 50 + step_height;
-    let left_x = window_x + (4 + settings.random_offset.max_x_offset);
-    let right_x = window_x + window_width - (4 + settings.random_offset.max_x_offset);
+    let left_x = window_x + 2;
+    let right_x = window_x + window_width - 2;
 
     // 1. Перемещаемся к начальной точке (левый верхний угол) с human-like движением
     human_like_move(left_x, current_y, &fast_movement_settings)?;
@@ -361,12 +362,13 @@ pub fn process_magnets_cloud(
                 drop_positions[i as usize] = (drop_positions[i as usize] + 3) % (line_length - 4);
             }
             draw_cloud(&drop_positions, false, line_length);
-            thread::sleep(Duration::from_millis(1));
+            thread::sleep(Duration::from_millis(2));
         }
     }
 
     // Отпускаем кнопку мыши
     Command::new("xdotool").args(&["mouseup", "1"]).status()?;
+    thread::sleep(Duration::from_millis(2));
     human_like_move(original_x, original_y, &settings.human_like_movement)?;
 
     Ok(())

@@ -152,10 +152,12 @@ fn main() -> AppResult<()> {
             .collect();
 
         if cloud.len() > 0 && settings.automation.shtorm.enabled {
-            process_magnets_cloud(window_x, window_y, window_width, window_height, &settings)?;
+            for _ in 1..settings.automation.shtorm.retries {
+                process_magnets_cloud(window_x, window_y, window_width, window_height, &settings)?;
 
-            // После обработки облака продолжаем основной цикл
-            thread::sleep(Duration::from_millis(3));
+                // После обработки облака продолжаем основной цикл
+                thread::sleep(Duration::from_millis(3));
+            }
             continue;
         }
 
