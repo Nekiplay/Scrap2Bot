@@ -12,3 +12,7 @@
 
 # Dependencies
 ```sudo pacman -S xdotool xorg-xwininfo wmctrl maim opencv```
+
+
+# Requirements
+- Russian game langunage
