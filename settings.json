@@ -3533,6 +3533,42 @@
             "red": 222,
             "green": 58,
             "blue": 109
+        },
+        {
+            "name": "Barrel 450",
+            "path": "templates/barrels/450.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 116,
+            "green": 54,
+            "blue": 15
+        },
+        {
+            "name": "Barrel 451",
+            "path": "templates/barrels/451.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 42,
+            "green": 208,
+            "blue": 52
+        },
+        {
+            "name": "Barrel 452",
+            "path": "templates/barrels/452.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 50,
+            "green": 43,
+            "blue": 70
+        },
+        {
+            "name": "Barrel 453",
+            "path": "templates/barrels/453.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 159,
+            "green": 159,
+            "blue": 161
         }
     ]
 }
