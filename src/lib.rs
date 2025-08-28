@@ -5,3 +5,4 @@ pub mod objectdetector;
 pub mod processors;
 pub mod settings;
 pub mod utils;
+pub mod open_cv_drawing;

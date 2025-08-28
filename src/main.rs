@@ -14,12 +14,14 @@ use scrap2_bot::objectdetector::DetectionResult;
 use scrap2_bot::objectdetector::ObjectDetector;
 use scrap2_bot::processors::process_barrels;
 use scrap2_bot::processors::process_magnets_cloud;
+use scrap2_bot::settings::AntiCaptcha;
 use scrap2_bot::settings::Automation;
 use scrap2_bot::settings::HumanLikeMovementSettings;
 use scrap2_bot::settings::Merge;
 use scrap2_bot::settings::RandomOffsetSettings;
 use scrap2_bot::settings::Settings;
 use scrap2_bot::settings::Shtorm;
+use scrap2_bot::utils;
 use scrap2_bot::utils::check_and_suggest_window_size;
 use scrap2_bot::utils::clear_screen;
 use std::env;
@@ -69,6 +71,10 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
                     enabled: true,
                     retries: 1,
                 },
+                anticaptcha: AntiCaptcha {
+                    enabled: true,
+                    mode: "mask"
+                }
             },
             templates: Vec::new(),
         };
@@ -144,6 +150,8 @@ fn main() -> AppResult<()> {
             imgcodecs::imwrite("result.png", &image, &Vector::new())?;
         }
 
+        let (original_x, original_y) = utils::get_currect_mouse_potision()?;
+
         // Обработка облака мангинитов
         let cloud: Vec<DetectionResult> = detections
             .clone()
@@ -152,10 +160,18 @@ fn main() -> AppResult<()> {
             .collect();
 
         if cloud.len() > 0 && settings.automation.shtorm.enabled {
-            process_magnets_cloud(window_x, window_y, window_width, window_height, &settings)?;
+            for _ in 1..settings.automation.shtorm.retries {
+                process_magnets_cloud(window_x, window_y, window_width, window_height)?;
 
-            // После обработки облака продолжаем основной цикл
-            thread::sleep(Duration::from_millis(3));
+                // После обработки облака продолжаем основной цикл
+                thread::sleep(Duration::from_millis(3));
+            }
+
+            if !is_on_window && settings.human_like_movement.enabled {
+                human_like_move(original_x, original_y, &settings.human_like_movement)?;
+            } else if !&settings.human_like_movement.enabled {
+                human_like_move(original_x, original_y, &settings.human_like_movement)?;
+            }
             continue;
         }
 
@@ -197,8 +213,7 @@ fn main() -> AppResult<()> {
                 num_a.cmp(&num_b)
             });
 
-            let (_, (original_x, original_y)) =
-                process_barrels(window_x, window_y, barrels, &mut detector, &settings)?;
+            let _ = process_barrels(window_x, window_y, barrels, &mut detector, &settings)?;
 
             if !is_on_window && settings.human_like_movement.enabled {
                 human_like_move(original_x, original_y, &settings.human_like_movement)?;

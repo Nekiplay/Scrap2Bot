@@ -79,6 +79,25 @@ pub fn clear_screen() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+pub fn get_currect_mouse_potision() -> Result<(i32, i32), Box<dyn std::error::Error>> {
+    let original_pos = Command::new("xdotool")
+        .args(&["getmouselocation", "--shell"])
+        .output()?;
+
+    let original_pos = String::from_utf8(original_pos.stdout)?;
+    let mut original_x = 0;
+    let mut original_y = 0;
+
+    for line in original_pos.lines() {
+        if line.starts_with("X=") {
+            original_x = line[2..].parse().unwrap_or(0);
+        } else if line.starts_with("Y=") {
+            original_y = line[2..].parse().unwrap_or(0);
+        }
+    }
+    Ok((original_x, original_y))
+}
+
 pub fn extract_barrel_number(name: &str) -> Option<u32> {
     // Remove any file extensions first
     let clean_name = name.split('.').next().unwrap_or(name);

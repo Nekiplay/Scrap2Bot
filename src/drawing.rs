@@ -23,6 +23,10 @@ pub fn get_contrast_text_color(bg_r: f32, bg_g: f32, bg_b: f32) -> &'static str 
     }
 }
 
+pub fn_draw_captcha() {
+    
+}
+
 pub fn draw_cloud(drop_positions: &[usize], is_moving_right: bool, line_length: usize) {
     print!("\x1B[2J\x1B[1;1H"); // Очистка экрана
 
@@ -60,9 +64,9 @@ pub fn draw_cloud(drop_positions: &[usize], is_moving_right: bool, line_length: 
 
     // Статус с правильным выравниванием
     let status = if is_moving_right {
-        "\x1B[36mCollecting magnets >>\x1B[0m"
+        "\x1B[36mCollecting shtorm >>\x1B[0m"
     } else {
-        "\x1B[36mCollecting magnets <<\x1B[0m"
+        "\x1B[36mCollecting shtorm <<\x1B[0m"
     };
 
     // Удаляем escape-последовательности для расчета ширины
@@ -136,7 +140,7 @@ pub fn display_results_as_table(
     let mut table: Vec<Vec<Option<(u32, (f32, f32, f32))>>> = vec![vec![None; cols]; rows];
 
     // Заполняем таблицу только бочками
-    for barrel in &barrels {
+    for barrel in detections {
         let col = if cell_width > 0.0 {
             ((barrel.location.x - min_x) as f32 / cell_width).round() as usize
         } else {
@@ -148,21 +152,30 @@ pub fn display_results_as_table(
             0
         };
 
-        let number = barrel
-            .object_name
-            .chars()
-            .filter_map(|c| c.to_digit(10))
-            .fold(0, |acc, digit| acc * 10 + digit);
+        if barrel.object_name == "Empty" {
+            if row < rows && col < cols {
+                table[row][col] = Some((0, (0.0, 0.0, 0.0)));
+            }
+        } else {
+            let number = barrel
+                .object_name
+                .chars()
+                .filter_map(|c| c.to_digit(10))
+                .fold(0, |acc, digit| acc * 10 + digit);
 
-        if row < rows && col < cols {
-            if let Some(template) = templates.iter().find(|t| t.name == barrel.object_name) {
-                table[row][col] = Some((number, (template.red, template.green, template.blue)));
+            if row < rows && col < cols {
+                if let Some(template) = templates.iter().find(|t| t.name == barrel.object_name) {
+                    table[row][col] = Some((number, (template.red, template.green, template.blue)));
+                }
             }
         }
     }
 
     let (min_lvl, max_lvl, merges_remaining) = calculate_required_merges(
-        &barrels.iter().map(|b| (*b).clone()).collect::<Vec<DetectionResult>>()
+        &barrels
+            .iter()
+            .map(|b| (*b).clone())
+            .collect::<Vec<DetectionResult>>(),
     );
 
     // Table drawing with fixed cell width
@@ -186,8 +199,10 @@ pub fn display_results_as_table(
             if let Some((num, (r, g, b))) = &table[row][col] {
                 if *num != 0 {
                     let text_color = get_contrast_text_color(*r, *g, *b);
-                    print!("{} \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ", 
-                           text_color, r, g, b, num);
+                    print!(
+                        "{} \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ",
+                        text_color, r, g, b, num
+                    );
                 } else {
                     print!("{}", empty_cell);
                 }
@@ -215,8 +230,10 @@ pub fn display_results_as_table(
         if let Some((num, (r, g, b))) = &table[rows - 1][col] {
             if *num != 0 {
                 let text_color = get_contrast_text_color(*r, *g, *b);
-                print!("{} \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ", 
-                       text_color, r, g, b, num);
+                print!(
+                    "{} \x1b[48;2;{:.0};{:.0};{:.0}m{:^3}\x1b[0m ",
+                    text_color, r, g, b, num
+                );
             } else {
                 print!("{}", empty_cell);
             }

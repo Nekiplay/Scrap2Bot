@@ -1,6 +1,13 @@
 use std::error::Error;
 use std::fmt;
 use std::process::Command;
+use opencv::core::Vec3b;
+use opencv::core::Mat;
+use opencv::prelude::MatTraitConst;
+use opencv::Result;
+use opencv::prelude::MatTraitConstManual;
+use opencv::imgcodecs::IMREAD_COLOR;
+use opencv::imgcodecs::imread;
 
 #[derive(Debug)]
 pub enum AppError {
@@ -70,6 +77,46 @@ impl From<Box<dyn std::error::Error>> for AppError {
 }
 
 pub type AppResult<T> = std::result::Result<T, AppError>;
+
+fn get_pixel_safe(img: &Mat, x: i32, y: i32) -> Result<Option<[u8; 3]>> {
+    if x >= img.cols() || y >= img.rows() || x < 0 || y < 0 {
+        return Ok(None);
+    }
+    
+    let pixel: Vec3b = *img.at_2d::<Vec3b>(y, x)?;
+    Ok(Some([pixel[0], pixel[1], pixel[2]]))
+}
+
+fn get_dominant_colors(image_path: &str, k: i32) -> Result<()> {
+    let img = imread(image_path, IMREAD_COLOR)?;
+    let samples = img.reshape(1, img.rows() * img.cols())?.to_mat()?.to_vec_2d::<f32>()?;
+    
+    let mut labels = Mat::default();
+    let mut centers = Mat::default();
+    let criteria = opencv::core::TermCriteria::new(
+        opencv::core::TermCriteria_Type::COUNT + opencv::core::TermCriteria_Type::EPS,
+        10,
+        1.0,
+    )?;
+    
+    opencv::core::kmeans(
+        &samples,
+        k,
+        &mut labels,
+        criteria,
+        3,
+        opencv::core::KMEANS_PP_CENTERS,
+        &mut centers,
+    )?;
+    
+    println!("Доминирующие цвета:");
+    for i in 0..centers.rows() {
+        let center: Vec<f32> = centers.at_row(i)?.to_vec();
+        println!("Цвет {}: B:{}, G:{}, R:{}", i, center[0], center[1], center[2]);
+    }
+    
+    Ok(())
+}
 
 pub fn capture_window_by_title(window_title: &str, output: &str) -> AppResult<(i32, i32)> {
     let geometry = Command::new("xwininfo")

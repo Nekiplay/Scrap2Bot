@@ -12,3 +12,4 @@ x11rb = { version = "0.12.0" }
 rayon = "1.5"
 rand = "0.8"
 crossterm = "0.26"
+ocrs = "0.10.4"

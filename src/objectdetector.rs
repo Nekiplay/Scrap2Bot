@@ -266,8 +266,8 @@ impl ObjectDetector {
         //);
 
         // Calculate the desired number range
-        let target_min_number = min_detected.saturating_sub(5); // 303 - 5 = 298
-        let target_max_number = max_detected + 8; // 371 + 8 = 379
+        let target_min_number = min_detected.saturating_sub(8); // 303 - 5 = 298
+        let target_max_number = max_detected + 4; // 371 + 8 = 379
 
         //println!(
         //    "DEBUG: Target number range: {} - {}",
