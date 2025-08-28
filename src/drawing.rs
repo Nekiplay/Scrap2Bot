@@ -136,7 +136,7 @@ pub fn display_results_as_table(
     let mut table: Vec<Vec<Option<(u32, (f32, f32, f32))>>> = vec![vec![None; cols]; rows];
 
     // Заполняем таблицу только бочками
-    for barrel in &barrels {
+    for barrel in detections {
         let col = if cell_width > 0.0 {
             ((barrel.location.x - min_x) as f32 / cell_width).round() as usize
         } else {
@@ -148,15 +148,21 @@ pub fn display_results_as_table(
             0
         };
 
-        let number = barrel
-            .object_name
-            .chars()
-            .filter_map(|c| c.to_digit(10))
-            .fold(0, |acc, digit| acc * 10 + digit);
+        if barrel.object_name == "Empty" {
+            if row < rows && col < cols {
+                table[row][col] = Some((0, (0.0, 0.0, 0.0)));
+            }
+        } else {
+            let number = barrel
+                .object_name
+                .chars()
+                .filter_map(|c| c.to_digit(10))
+                .fold(0, |acc, digit| acc * 10 + digit);
 
-        if row < rows && col < cols {
-            if let Some(template) = templates.iter().find(|t| t.name == barrel.object_name) {
-                table[row][col] = Some((number, (template.red, template.green, template.blue)));
+            if row < rows && col < cols {
+                if let Some(template) = templates.iter().find(|t| t.name == barrel.object_name) {
+                    table[row][col] = Some((number, (template.red, template.green, template.blue)));
+                }
             }
         }
     }
