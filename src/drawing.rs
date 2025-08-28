@@ -23,6 +23,10 @@ pub fn get_contrast_text_color(bg_r: f32, bg_g: f32, bg_b: f32) -> &'static str 
     }
 }
 
+pub fn_draw_captcha() {
+    
+}
+
 pub fn draw_cloud(drop_positions: &[usize], is_moving_right: bool, line_length: usize) {
     print!("\x1B[2J\x1B[1;1H"); // Очистка экрана
 

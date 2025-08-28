@@ -9,6 +9,10 @@ use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
+pub fn anti_anti_captcha() {
+    
+}
+
 pub fn calculate_required_merges(barrels: &[DetectionResult]) -> (u32, u32, u32) {
     // Собираем статистику по уровням бочек
     let mut level_counts = std::collections::HashMap::new();
@@ -60,25 +64,8 @@ pub fn process_barrels(
     mut barrels: Vec<DetectionResult>,
     detector: &mut ObjectDetector,
     settings: &Settings,
-) -> AppResult<(Vec<DetectionResult>, (i32, i32))> {
+) -> AppResult<Vec<DetectionResult>> {
     let mut rng = rand::thread_rng();
-
-    // Получаем текущую позицию курсора
-    let original_pos = Command::new("xdotool")
-        .args(&["getmouselocation", "--shell"])
-        .output()?;
-
-    let original_pos = String::from_utf8(original_pos.stdout)?;
-    let mut original_x = 0;
-    let mut original_y = 0;
-
-    for line in original_pos.lines() {
-        if line.starts_with("X=") {
-            original_x = line[2..].parse().unwrap_or(0);
-        } else if line.starts_with("Y=") {
-            original_y = line[2..].parse().unwrap_or(0);
-        }
-    }
 
     let mut merged = true;
     while merged {
@@ -256,7 +243,7 @@ pub fn process_barrels(
         }
     }
 
-    Ok((barrels, (original_x, original_y)))
+    Ok(barrels)
 }
 
 pub fn process_magnets_cloud(
@@ -264,25 +251,7 @@ pub fn process_magnets_cloud(
     window_y: i32,
     window_width: i32,
     window_height: i32,
-    settings: &Settings,
 ) -> AppResult<()> {
-    // Получаем текущую позицию курсора
-    let original_pos = Command::new("xdotool")
-        .args(&["getmouselocation", "--shell"])
-        .output()?;
-
-    let original_pos = String::from_utf8(original_pos.stdout)?;
-    let mut original_x = 0;
-    let mut original_y = 0;
-
-    for line in original_pos.lines() {
-        if line.starts_with("X=") {
-            original_x = line[2..].parse().unwrap_or(0);
-        } else if line.starts_with("Y=") {
-            original_y = line[2..].parse().unwrap_or(0);
-        }
-    }
-
     let fast_movement_settings = HumanLikeMovementSettings {
         enabled: true,
         max_deviation: 0.000001,
@@ -368,8 +337,5 @@ pub fn process_magnets_cloud(
 
     // Отпускаем кнопку мыши
     Command::new("xdotool").args(&["mouseup", "1"]).status()?;
-    thread::sleep(Duration::from_millis(2));
-    human_like_move(original_x, original_y, &settings.human_like_movement)?;
-
     Ok(())
 }
