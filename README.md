@@ -15,4 +15,4 @@
 
 
 # Requirements
-- Russian game langunage
+- For default settings: Russian game langunage
