@@ -3668,6 +3668,96 @@
             "red": 213,
             "green": 191,
             "blue": 168
+        },
+        {
+            "name": "Barrel 465",
+            "path": "templates/barrels/465.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 183,
+            "green": 42,
+            "blue": 45
+        },
+        {
+            "name": "Barrel 466",
+            "path": "templates/barrels/466.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 126,
+            "green": 126,
+            "blue": 126
+        },
+        {
+            "name": "Barrel 467",
+            "path": "templates/barrels/467.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 12,
+            "green": 143,
+            "blue": 238
+        },
+        {
+            "name": "Barrel 468",
+            "path": "templates/barrels/468.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 135,
+            "green": 94,
+            "blue": 30
+        },
+        {
+            "name": "Barrel 469",
+            "path": "templates/barrels/469.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 143,
+            "green": 112,
+            "blue": 225
+        },
+        {
+            "name": "Barrel 470",
+            "path": "templates/barrels/470.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 191,
+            "green": 82,
+            "blue": 26
+        },
+        {
+            "name": "Barrel 471",
+            "path": "templates/barrels/471.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 40,
+            "green": 103,
+            "blue": 74
+        },
+        {
+            "name": "Barrel 472",
+            "path": "templates/barrels/472.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 73,
+            "green": 81,
+            "blue": 102
+        },
+        {
+            "name": "Barrel 473",
+            "path": "templates/barrels/473.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 101,
+            "green": 101,
+            "blue": 101
+        },
+        {
+            "name": "Barrel 474",
+            "path": "templates/barrels/474.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 238,
+            "green": 95,
+            "blue": 95
         }
     ]
 }
