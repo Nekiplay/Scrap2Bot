@@ -3758,6 +3758,78 @@
             "red": 238,
             "green": 95,
             "blue": 95
+        },
+        {
+            "name": "Barrel 475",
+            "path": "templates/barrels/475.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 29,
+            "green": 100,
+            "blue": 175
+        },
+        {
+            "name": "Barrel 476",
+            "path": "templates/barrels/476.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 213,
+            "green": 194,
+            "blue": 55
+        },
+        {
+            "name": "Barrel 477",
+            "path": "templates/barrels/477.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 86,
+            "green": 175,
+            "blue": 159
+        },
+        {
+            "name": "Barrel 478",
+            "path": "templates/barrels/478.png",
+            "threshold": 0.8,
+            "min_distance": 15.0,
+            "red": 113,
+            "green": 79,
+            "blue": 62
+        },
+        {
+            "name": "Barrel 479",
+            "path": "templates/barrels/479.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 178,
+            "green": 93,
+            "blue": 175
+        },
+        {
+            "name": "Barrel 480",
+            "path": "templates/barrels/480.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 201,
+            "green": 144,
+            "blue": 79
+        },
+        {
+            "name": "Barrel 481",
+            "path": "templates/barrels/481.png",
+            "threshold": 0.71,
+            "min_distance": 15.0,
+            "red": 235,
+            "green": 226,
+            "blue": 209
+        },
+        {
+            "name": "Barrel 482",
+            "path": "templates/barrels/482.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 107,
+            "green": 120,
+            "blue": 126
         }
     ]
 }
