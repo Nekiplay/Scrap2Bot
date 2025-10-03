@@ -1,5 +1,5 @@
-use crate::capture::{AppError, AppResult};
 use crate::drawing::draw_cloud;
+use crate::capture::WindowsCaptureError;
 use crate::moving::human_like_move;
 use crate::objectdetector::{DetectionResult, ObjectDetector};
 use crate::settings::{HumanLikeMovementSettings, Settings};
@@ -8,6 +8,8 @@ use rand::Rng;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
+use crate::moving::mouse_left_up; 
+use crate::moving::mouse_left_down;
 
 pub fn anti_anti_captcha() {
     
@@ -64,7 +66,7 @@ pub fn process_barrels(
     mut barrels: Vec<DetectionResult>,
     detector: &mut ObjectDetector,
     settings: &Settings,
-) -> AppResult<Vec<DetectionResult>> {
+) -> Result<Vec<DetectionResult>, Box<dyn std::error::Error>> {
     let mut rng = rand::thread_rng();
 
     let mut merged = true;
@@ -129,13 +131,13 @@ pub fn process_barrels(
                     .templates
                     .iter()
                     .find(|t| t.name == from.object_name)
-                    .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                    .ok_or_else(|| WindowsCaptureError::ImageProcessing("Template not found".to_string()))?;
 
                 let to_template = detector
                     .templates
                     .iter()
                     .find(|t| t.name == to.object_name)
-                    .ok_or_else(|| AppError::ImageProcessing("Template not found".to_string()))?;
+                    .ok_or_else(|| WindowsCaptureError::ImageProcessing("Template not found".to_string()))?;
 
                 let from_size = (from_template.template.cols(), from_template.template.rows());
                 let to_size = (to_template.template.cols(), to_template.template.rows());
@@ -191,7 +193,7 @@ pub fn process_barrels(
                 }
                 human_like_move(abs_from_x, abs_from_y, &settings.human_like_movement)?;
                 // Нажимаем кнопку мыши
-                Command::new("xdotool").args(&["mousedown", "1"]).status()?;
+                mouse_left_down()?;
 
                 // Небольшая пауза перед началом перемещения
                 if settings.human_like_movement.enabled {
@@ -219,7 +221,7 @@ pub fn process_barrels(
 
                 // Отпускаем кнопку мыши
                 human_like_move(abs_to_x, abs_to_y, &settings.human_like_movement)?;
-                Command::new("xdotool").args(&["mouseup", "1"]).status()?;
+                mouse_left_up()?;
 
                 // Сохраняем новую бочку
                 new_barrels.push(DetectionResult {
@@ -251,7 +253,7 @@ pub fn process_magnets_cloud(
     window_y: i32,
     window_width: i32,
     window_height: i32,
-) -> AppResult<()> {
+) -> Result<(), Box<dyn std::error::Error>> {
     let fast_movement_settings = HumanLikeMovementSettings {
         enabled: true,
         max_deviation: 0.000001,
@@ -290,7 +292,7 @@ pub fn process_magnets_cloud(
     thread::sleep(Duration::from_millis(1));
 
     // 2. Нажимаем кнопку мыши
-    Command::new("xdotool").args(&["mousedown", "1"]).status()?;
+    mouse_left_down()?;
 
     while current_y < window_y + window_height - 80 - step_height {
         // Движение вправо - с human-like движением
@@ -303,9 +305,7 @@ pub fn process_magnets_cloud(
 
         // Движение вниз - прямое перемещение без human-like
         current_y += step_height;
-        Command::new("xdotool")
-            .args(&["mousemove", &right_x.to_string(), &current_y.to_string()])
-            .status()?;
+        human_like_move(right_x, current_y, &fast_movement_settings)?;
         for i in 0..5 {
             drop_positions[i as usize] = (drop_positions[i as usize] + 2) % (line_length - 4);
         }
@@ -324,9 +324,7 @@ pub fn process_magnets_cloud(
         // Движение вниз (если не вышли за границы) - прямое перемещение без human-like
         if current_y < window_y + window_height - step_height {
             current_y += step_height;
-            Command::new("xdotool")
-                .args(&["mousemove", &left_x.to_string(), &current_y.to_string()])
-                .status()?;
+            human_like_move(left_x, current_y, &fast_movement_settings)?;
             for i in 0..5 {
                 drop_positions[i as usize] = (drop_positions[i as usize] + 3) % (line_length - 4);
             }
@@ -336,6 +334,6 @@ pub fn process_magnets_cloud(
     }
 
     // Отпускаем кнопку мыши
-    Command::new("xdotool").args(&["mouseup", "1"]).status()?;
+    mouse_left_up()?;
     Ok(())
 }

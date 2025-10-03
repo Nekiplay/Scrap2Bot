@@ -1,67 +1,83 @@
-use crate::capture::AppResult;
-use crate::capture::get_window_size;
+use std::error::Error;
 use std::io;
 use std::io::Write;
 use std::process::Command;
+
+use winapi::shared::windef::HWND;
+use winapi::shared::minwindef::BOOL;
+use winapi::um::winuser::{
+    FindWindowW, GetWindowRect, SetWindowPos, SWP_NOZORDER, SWP_NOMOVE,
+};
+use winapi::shared::windef::RECT;
+use std::os::windows::ffi::OsStrExt;
+use std::ffi::OsStr;
+use std::ptr::null_mut;
+
+fn to_wstring(s: &str) -> Vec<u16> {
+    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+}
 
 pub fn check_and_suggest_window_size(
     window_title: &str,
     recommended_width: i32,
     recommended_height: i32,
-) -> AppResult<()> {
-    let (current_width, current_height) = get_window_size(window_title)?;
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Поиск окна по заголовку
+    let hwnd: HWND = unsafe { FindWindowW(null_mut(), to_wstring(window_title).as_ptr()) };
+    if hwnd.is_null() {
+        return Err(format!("Не найдено окно с заголовком '{}'", window_title).into());
+    }
 
-    // Define tolerance (5 pixels in each direction)
+    // Получение текущих размеров окна
+    let mut rect: RECT = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let result: BOOL = unsafe { GetWindowRect(hwnd, &mut rect) };
+    if result == 0 {
+        return Err("Не удалось получить размер окна".into());
+    }
+    let current_width = rect.right - rect.left;
+    let current_height = rect.bottom - rect.top;
+
     const TOLERANCE: i32 = 5;
     let width_diff = (current_width - recommended_width).abs();
     let height_diff = (current_height - recommended_height).abs();
 
     if width_diff > TOLERANCE || height_diff > TOLERANCE {
-        print!(
-            "Current window size: {}x{}\n",
-            current_width, current_height
-        );
-        print!(
-            "Recommended window size: {}x{} (with ±{}px tolerance)\n",
+        println!("Текущий размер окна: {}x{}", current_width, current_height);
+        println!(
+            "Рекомендуемый размер окна: {}x{} (±{}px допуск)",
             recommended_width, recommended_height, TOLERANCE
         );
-
-        // Show exact difference information
         if width_diff > TOLERANCE {
-            print!(
-                "Width difference: {}px (tolerance: {}px)\n",
-                width_diff, TOLERANCE
-            );
+            println!("Разница по ширине: {}px (допуск {}px)", width_diff, TOLERANCE);
         }
         if height_diff > TOLERANCE {
-            print!(
-                "Height difference: {}px (tolerance: {}px)\n",
-                height_diff, TOLERANCE
-            );
+            println!("Разница по высоте: {}px (допуск {}px)", height_diff, TOLERANCE);
         }
 
-        print!("Would you like to resize the window to the recommended size? (y/n)\n");
+        print!("Хотите изменить размер окна на рекомендованный? (y/n): ");
+        io::stdout().flush()?;
 
         let mut input = String::new();
-        std::io::stdin().read_line(&mut input)?;
+        io::stdin().read_line(&mut input)?;
 
-        if input.trim().to_lowercase() == "y" {
-            Command::new("wmctrl")
-                .args(&[
-                    "-r",
-                    window_title,
-                    "-e",
-                    &format!("0,-1,-1,{},{}", recommended_width, recommended_height),
-                ])
-                .status()?;
-            print!(
-                "Window size changed to {}x{}. Please restart the program.\n",
+        if input.trim().eq_ignore_ascii_case("y") {
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    null_mut(),
+                    0,
+                    0,
+                    recommended_width,
+                    recommended_height,
+                    SWP_NOZORDER | SWP_NOMOVE,
+                );
+            }
+            println!(
+                "Размер окна изменен на {}x{}. Пожалуйста, перезапустите программу.",
                 recommended_width, recommended_height
             );
         } else {
-            print!(
-                "Continuing with current window size. Detection results may be less accurate.\n"
-            );
+            println!("Продолжаем с текущим размером окна. Результаты могут быть менее точными.");
         }
     }
 
@@ -79,23 +95,16 @@ pub fn clear_screen() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn get_currect_mouse_potision() -> Result<(i32, i32), Box<dyn std::error::Error>> {
-    let original_pos = Command::new("xdotool")
-        .args(&["getmouselocation", "--shell"])
-        .output()?;
+use winapi::shared::windef::POINT;
+use winapi::um::winuser::GetCursorPos;
 
-    let original_pos = String::from_utf8(original_pos.stdout)?;
-    let mut original_x = 0;
-    let mut original_y = 0;
-
-    for line in original_pos.lines() {
-        if line.starts_with("X=") {
-            original_x = line[2..].parse().unwrap_or(0);
-        } else if line.starts_with("Y=") {
-            original_y = line[2..].parse().unwrap_or(0);
-        }
+pub fn get_current_mouse_position() -> Result<(i32, i32), Box<dyn Error>> {
+    let mut point = POINT { x: 0, y: 0 };
+    let success = unsafe { GetCursorPos(&mut point) };
+    if success == 0 {
+        return Err("Не удалось получить позицию мыши".into());
     }
-    Ok((original_x, original_y))
+    Ok((point.x, point.y))
 }
 
 pub fn extract_barrel_number(name: &str) -> Option<u32> {

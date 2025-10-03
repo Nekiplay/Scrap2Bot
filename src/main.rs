@@ -3,11 +3,8 @@ use opencv::core::Vector;
 use opencv::imgcodecs;
 use opencv::imgcodecs::IMREAD_COLOR;
 use opencv::prelude::MatTraitConst;
-use scrap2_bot::capture::AppError;
-use scrap2_bot::capture::AppResult;
-use scrap2_bot::capture::capture_window_by_title;
+use scrap2_bot::capture::{capture_window_by_title, save_as_png, to_mat, WindowsCaptureError};
 use scrap2_bot::capture::get_window_size;
-use scrap2_bot::capture::is_cursor_in_window;
 use scrap2_bot::drawing::display_results_as_table;
 use scrap2_bot::moving::human_like_move;
 use scrap2_bot::objectdetector::DetectionResult;
@@ -29,13 +26,13 @@ use std::fs;
 use std::thread;
 use std::time::Duration;
 
-fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
+fn load_or_create_settings(window_title: &str) -> Result<Settings, Box<dyn std::error::Error>> {
     let settings_path = "settings.json";
 
     if let Ok(settings_content) = fs::read_to_string(settings_path) {
         serde_json::from_str(&settings_content).map_err(Into::into)
     } else {
-        let (width, height) = get_window_size(window_title)?;
+        let (_, _, width, height) = get_window_size(window_title)?;
 
         let settings = Settings {
             window_title: window_title.to_string(),
@@ -73,7 +70,7 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
                 },
                 anticaptcha: AntiCaptcha {
                     enabled: true,
-                    mode: "mask"
+                    mode: "mask".to_string()
                 }
             },
             templates: Vec::new(),
@@ -86,7 +83,7 @@ fn load_or_create_settings(window_title: &str) -> AppResult<Settings> {
     }
 }
 
-fn main() -> AppResult<()> {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
     let infinite_mode = args.iter().any(|arg| arg == "--infinite" || arg == "-i");
     let debug_mode = args.iter().any(|arg| arg == "--debug" || arg == "-d");
@@ -122,23 +119,22 @@ fn main() -> AppResult<()> {
     let mut last_frame_time = std::time::Instant::now();
     loop {
         let screenshot_path = "screenshot.png";
-        let (window_x, window_y) =
-            capture_window_by_title(&settings.window_title, screenshot_path)?;
+        let image =
+            capture_window_by_title(&settings.window_title)?;
+        save_as_png(&image, screenshot_path)?;
         let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR)
-            .map_err(|e| AppError::ImageProcessing(format!("Failed to load screenshot: {}", e)))?;
+            .map_err(|e| WindowsCaptureError::ImageProcessing(format!("Failed to load screenshot: {}", e)))?;
 
         if image.empty() {
-            return Err(AppError::ImageProcessing(
-                "Loaded image is empty".to_string(),
-            ));
+            return Err(WindowsCaptureError::ImageProcessing(
+                "Loaded image is empty".parse().unwrap(),
+            ).into());
         }
 
         let (detections, detection_time) =
             detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
 
-        let (window_width, window_height) = get_window_size(&settings.window_title)?;
-
-        let is_on_window = is_cursor_in_window(window_x, window_y, window_width, window_height)?;
+        let (window_x, window_y, window_width, window_height) = get_window_size(&settings.window_title)?;
 
         let current_time = std::time::Instant::now();
         let frame_time = current_time.duration_since(last_frame_time).as_secs_f64();
@@ -150,7 +146,7 @@ fn main() -> AppResult<()> {
             imgcodecs::imwrite("result.png", &image, &Vector::new())?;
         }
 
-        let (original_x, original_y) = utils::get_currect_mouse_potision()?;
+        let (original_x, original_y) = utils::get_current_mouse_position()?;
 
         // Обработка облака мангинитов
         let cloud: Vec<DetectionResult> = detections
@@ -167,11 +163,7 @@ fn main() -> AppResult<()> {
                 thread::sleep(Duration::from_millis(3));
             }
 
-            if !is_on_window && settings.human_like_movement.enabled {
-                human_like_move(original_x, original_y, &settings.human_like_movement)?;
-            } else if !&settings.human_like_movement.enabled {
-                human_like_move(original_x, original_y, &settings.human_like_movement)?;
-            }
+            human_like_move(original_x, original_y, &settings.human_like_movement)?;
             continue;
         }
 
@@ -215,11 +207,7 @@ fn main() -> AppResult<()> {
 
             let _ = process_barrels(window_x, window_y, barrels, &mut detector, &settings)?;
 
-            if !is_on_window && settings.human_like_movement.enabled {
-                human_like_move(original_x, original_y, &settings.human_like_movement)?;
-            } else if !&settings.human_like_movement.enabled {
-                human_like_move(original_x, original_y, &settings.human_like_movement)?;
-            }
+            human_like_move(original_x, original_y, &settings.human_like_movement)?;
             if !infinite_mode {
                 break;
             }

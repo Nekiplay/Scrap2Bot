@@ -1,5 +1,5 @@
 {
-  "window_title": "M2006C3MNG",
+  "window_title": "TECNO KM4",
   "reference_width": 433,
   "reference_height": 957,
   "resolution": 0.25,
@@ -10,19 +10,19 @@
     "max_y_offset": 20
   },
   "human_like_movement": {
-    "enabled": false,
-    "max_deviation": 0.24,
-    "speed_variation": 0.54,
-    "curve_smoothness": 18,
-    "min_pause_ms": 20,
-    "max_pause_ms": 25,
-    "base_speed": 0.01,
-    "min_down_ms": 20,
-    "max_down_ms": 25,
-    "min_up_ms": 20,
-    "max_up_ms": 25,
-    "min_move_delay_ms": 20,
-    "max_move_delay_ms": 25
+    "enabled": true,
+    "max_deviation": 0.14,
+    "speed_variation": 0.00001,
+    "curve_smoothness": 12,
+    "min_pause_ms": 1,
+    "max_pause_ms": 2,
+    "base_speed": 0.000001,
+    "min_down_ms": 35,
+    "max_down_ms": 40,
+    "min_up_ms": 1,
+    "max_up_ms": 2,
+    "min_move_delay_ms": 1,
+    "max_move_delay_ms": 2
   },
   "automation": {
     "merge": {
@@ -34,7 +34,11 @@
     },
     "fragments": {
         "enabled": false
-    }
+    },
+	"anticaptcha": {
+		"enabled": false,
+		"mode": ""
+	}
   },
   "convert_to_grayscale": false,
   "use_gpu": true,
@@ -44,16 +48,6 @@
             "path": "templates/ui/cloud.png",
             "threshold": 0.85,
             "min_distance": 5.0,
-            "red": 105,
-            "green": 105,
-            "blue": 105,
-            "always_active": true
-        },
-        {
-            "name": "Captcha",
-            "path": "templates/ui/captcha.png",
-            "threshold": 0.7,
-            "min_distance": 15.0,
             "red": 105,
             "green": 105,
             "blue": 105,
@@ -3843,6 +3837,15 @@
         {
             "name": "Barrel 484",
             "path": "templates/barrels/484.png",
+            "threshold": 0.82,
+            "min_distance": 15.0,
+            "red": 33,
+            "green": 100,
+            "blue": 33
+        },
+		{
+            "name": "Barrel 485",
+            "path": "templates/barrels/485.png",
             "threshold": 0.82,
             "min_distance": 15.0,
             "red": 33,

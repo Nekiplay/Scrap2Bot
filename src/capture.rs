@@ -1,256 +1,336 @@
 use std::error::Error;
 use std::fmt;
 use std::process::Command;
-use opencv::core::Vec3b;
-use opencv::core::Mat;
-use opencv::prelude::MatTraitConst;
-use opencv::Result;
-use opencv::prelude::MatTraitConstManual;
-use opencv::imgcodecs::IMREAD_COLOR;
-use opencv::imgcodecs::imread;
+use std::ffi::CString;
+use std::mem;
+use std::ptr;
+use opencv::boxed_ref::BoxedRef;
+use winapi::um::winuser::{
+    FindWindowA, GetWindowRect, GetDC, ReleaseDC, GetClientRect, PrintWindow,
+    GetDesktopWindow, GetWindowDC, SetCapture, ReleaseCapture
+};
+use winapi::um::wingdi::{
+    CreateCompatibleDC, CreateCompatibleBitmap, SelectObject, BitBlt, GetDIBits,
+    DeleteObject, DeleteDC, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, SRCCOPY
+};
+use winapi::shared::windef::{HWND, HDC, HBITMAP, RECT};
+use winapi::shared::minwindef::{UINT, DWORD};
+use winapi::ctypes::c_void;
 
 #[derive(Debug)]
-pub enum AppError {
-    OpenCV(opencv::Error),
-    IO(std::io::Error),
-    Utf8(std::string::FromUtf8Error),
+pub enum WindowsCaptureError {
     WindowNotFound(String),
-    ScrotFailed(String),
-    ImageProcessing(String),
-    SettingsError(String),
-    X11Connect(x11rb::errors::ConnectError),
-    X11Error(Box<dyn std::error::Error>),
+    CaptureFailed(String),
+    WinApiError(String),
+	ImageProcessing(String),
 }
 
-impl fmt::Display for AppError {
+impl fmt::Display for WindowsCaptureError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            AppError::OpenCV(e) => write!(f, "OpenCV error: {}", e),
-            AppError::IO(e) => write!(f, "IO error: {}", e),
-            AppError::Utf8(e) => write!(f, "UTF-8 conversion error: {}", e),
-            AppError::WindowNotFound(title) => write!(f, "Window not found: {}", title),
-            AppError::ScrotFailed(msg) => write!(f, "Scrot failed: {}", msg),
-            AppError::ImageProcessing(msg) => write!(f, "Image processing error: {}", msg),
-            AppError::SettingsError(msg) => write!(f, "Settings error: {}", msg),
-            AppError::X11Connect(msg) => write!(f, "X11 connect error: {}", msg),
-            AppError::X11Error(msg) => write!(f, "X11 error: {}", msg),
+            WindowsCaptureError::WindowNotFound(title) => write!(f, "Window not found: {}", title),
+            WindowsCaptureError::CaptureFailed(msg) => write!(f, "Capture failed: {}", msg),
+            WindowsCaptureError::WinApiError(msg) => write!(f, "WinAPI error: {}", msg),
+			WindowsCaptureError::ImageProcessing(msg) => write!(f, "ImageProcessing error: {}", msg),
         }
     }
 }
 
-impl Error for AppError {}
+impl Error for WindowsCaptureError {}
 
-impl From<opencv::Error> for AppError {
-    fn from(e: opencv::Error) -> Self {
-        AppError::OpenCV(e)
-    }
+pub type WindowsCaptureResult<T> = std::result::Result<T, WindowsCaptureError>;
+
+/// Структура для хранения данных изображения
+pub struct CapturedImage {
+    pub width: u32,
+    pub height: u32,
+    pub pixels: Vec<u8>,
 }
 
-impl From<std::io::Error> for AppError {
-    fn from(e: std::io::Error) -> Self {
-        AppError::IO(e)
-    }
-}
-
-impl From<std::string::FromUtf8Error> for AppError {
-    fn from(e: std::string::FromUtf8Error) -> Self {
-        AppError::Utf8(e)
-    }
-}
-
-impl From<serde_json::Error> for AppError {
-    fn from(e: serde_json::Error) -> Self {
-        AppError::SettingsError(e.to_string())
-    }
-}
-
-impl From<x11rb::errors::ConnectError> for AppError {
-    fn from(e: x11rb::errors::ConnectError) -> Self {
-        AppError::X11Connect(e)
-    }
-}
-
-impl From<Box<dyn std::error::Error>> for AppError {
-    fn from(e: Box<dyn std::error::Error>) -> Self {
-        AppError::X11Error(e)
-    }
-}
-
-pub type AppResult<T> = std::result::Result<T, AppError>;
-
-fn get_pixel_safe(img: &Mat, x: i32, y: i32) -> Result<Option<[u8; 3]>> {
-    if x >= img.cols() || y >= img.rows() || x < 0 || y < 0 {
-        return Ok(None);
-    }
+/// Находит окно по заголовку
+pub fn find_window_by_title(title: &str) -> WindowsCaptureResult<HWND> {
+    let c_title = CString::new(title).map_err(|e| 
+        WindowsCaptureError::WinApiError(format!("Invalid title string: {}", e)))?;
     
-    let pixel: Vec3b = *img.at_2d::<Vec3b>(y, x)?;
-    Ok(Some([pixel[0], pixel[1], pixel[2]]))
-}
-
-fn get_dominant_colors(image_path: &str, k: i32) -> Result<()> {
-    let img = imread(image_path, IMREAD_COLOR)?;
-    let samples = img.reshape(1, img.rows() * img.cols())?.to_mat()?.to_vec_2d::<f32>()?;
-    
-    let mut labels = Mat::default();
-    let mut centers = Mat::default();
-    let criteria = opencv::core::TermCriteria::new(
-        opencv::core::TermCriteria_Type::COUNT + opencv::core::TermCriteria_Type::EPS,
-        10,
-        1.0,
-    )?;
-    
-    opencv::core::kmeans(
-        &samples,
-        k,
-        &mut labels,
-        criteria,
-        3,
-        opencv::core::KMEANS_PP_CENTERS,
-        &mut centers,
-    )?;
-    
-    println!("Доминирующие цвета:");
-    for i in 0..centers.rows() {
-        let center: Vec<f32> = centers.at_row(i)?.to_vec();
-        println!("Цвет {}: B:{}, G:{}, R:{}", i, center[0], center[1], center[2]);
-    }
-    
-    Ok(())
-}
-
-pub fn capture_window_by_title(window_title: &str, output: &str) -> AppResult<(i32, i32)> {
-    let geometry = Command::new("xwininfo")
-        .args(&["-name", window_title])
-        .output()?;
-
-    if !geometry.status.success() {
-        return Err(AppError::WindowNotFound(format!(
-            "Window '{}' not found",
-            window_title
-        )));
-    }
-
-    let geometry_output = String::from_utf8(geometry.stdout)?;
-
-    let parse_value = |s: &str| -> AppResult<i32> {
-        geometry_output
-            .lines()
-            .find(|l| l.trim().starts_with(s))
-            .and_then(|l| l.split(':').nth(1))
-            .and_then(|v| v.trim().split(' ').next())
-            .and_then(|v| v.parse().ok())
-            .ok_or_else(|| {
-                AppError::WindowNotFound(format!("Could not parse {} from xwininfo output", s))
-            })
+    let hwnd = unsafe {
+        FindWindowA(ptr::null(), c_title.as_ptr())
     };
 
-    let x = parse_value("Absolute upper-left X")?;
-    let y = parse_value("Absolute upper-left Y")?;
-    let width = parse_value("Width")?;
-    let height = parse_value("Height")?;
+    if hwnd.is_null() {
+        return Err(WindowsCaptureError::WindowNotFound(title.to_string()));
+    }
 
-    let geometry_str = format!("{}x{}+{}+{}", width, height, x, y);
-    let output_file = format!("{}", output.replace(" ", "_"));
+    Ok(hwnd)
+}
 
-    let status = Command::new("maim")
-        .args(&["-g", &geometry_str, &output_file])
-        .status()?;
+/// Получает размеры окна
+pub fn get_window_dimensions(hwnd: HWND) -> WindowsCaptureResult<(i32, i32, i32, i32)> {
+    let mut rect: RECT = unsafe { mem::zeroed() };
+    
+    let result = unsafe { GetWindowRect(hwnd, &mut rect) };
+    
+    if result == 0 {
+        return Err(WindowsCaptureError::WinApiError("Failed to get window rect".to_string()));
+    }
 
-    if !status.success() {
-        let status_import = Command::new("import")
-            .args(&[
-                "-window",
-                &format!("0x{:x}", parse_window_id(&geometry_output)?),
-                &output_file,
-            ])
-            .status();
+    Ok((rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top))
+}
 
-        if status_import.is_err() || !status_import.unwrap().success() {
-            return Err(AppError::ScrotFailed(format!(
-                "Failed to capture window area with both maim and import"
-            )));
+/// Основная функция захвата окна
+pub fn capture_window(hwnd: HWND) -> WindowsCaptureResult<CapturedImage> {
+    let (_, _, width, height) = get_window_dimensions(hwnd)?;
+    
+    if width <= 0 || height <= 0 {
+        return Err(WindowsCaptureError::CaptureFailed("Invalid window dimensions".to_string()));
+    }
+
+    unsafe {
+        // Получаем DC окна
+        let window_dc = GetDC(hwnd);
+        if window_dc.is_null() {
+            return Err(WindowsCaptureError::WinApiError("Failed to get window DC".to_string()));
         }
-    }
 
-    if !std::path::Path::new(&output_file).exists() {
-        return Err(AppError::ScrotFailed("Output file not created".to_string()));
-    }
-
-    Ok((x, y))
-}
-
-pub fn get_window_size(window_title: &str) -> AppResult<(i32, i32)> {
-    let output = Command::new("xwininfo")
-        .args(&["-name", window_title])
-        .output()?;
-
-    if !output.status.success() {
-        return Err(AppError::WindowNotFound(format!(
-            "Window '{}' not found",
-            window_title
-        )));
-    }
-
-    let output_str = String::from_utf8(output.stdout)?;
-
-    let width = output_str
-        .lines()
-        .find(|l| l.trim().starts_with("Width"))
-        .and_then(|l| l.split(':').nth(1))
-        .and_then(|v| v.trim().split(' ').next())
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| AppError::WindowNotFound("Could not parse width".to_string()))?;
-
-    let height = output_str
-        .lines()
-        .find(|l| l.trim().starts_with("Height"))
-        .and_then(|l| l.split(':').nth(1))
-        .and_then(|v| v.trim().split(' ').next())
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| AppError::WindowNotFound("Could not parse height".to_string()))?;
-
-    Ok((width, height))
-}
-
-pub fn is_cursor_in_window(
-    window_x: i32,
-    window_y: i32,
-    window_width: i32,
-    window_height: i32,
-) -> AppResult<bool> {
-    let output = Command::new("xdotool")
-        .args(&["getmouselocation", "--shell"])
-        .output()?;
-
-    let output_str = String::from_utf8(output.stdout)?;
-    let mut cursor_x = 0;
-    let mut cursor_y = 0;
-
-    for line in output_str.lines() {
-        if line.starts_with("X=") {
-            cursor_x = line[2..].parse().unwrap_or(0);
-        } else if line.starts_with("Y=") {
-            cursor_y = line[2..].parse().unwrap_or(0);
+        // Создаем совместимый DC
+        let mem_dc = CreateCompatibleDC(window_dc);
+        if mem_dc.is_null() {
+            ReleaseDC(hwnd, window_dc);
+            return Err(WindowsCaptureError::WinApiError("Failed to create compatible DC".to_string()));
         }
-    }
 
-    Ok(cursor_x >= window_x
-        && cursor_x <= window_x + window_width
-        && cursor_y >= window_y
-        && cursor_y <= window_y + window_height)
-}
+        // Создаем совместимый bitmap
+        let bitmap = CreateCompatibleBitmap(window_dc, width, height);
+        if bitmap.is_null() {
+            DeleteDC(mem_dc);
+            ReleaseDC(hwnd, window_dc);
+            return Err(WindowsCaptureError::WinApiError("Failed to create compatible bitmap".to_string()));
+        }
 
-pub fn parse_window_id(geometry_output: &str) -> AppResult<u32> {
-    geometry_output
-        .lines()
-        .find(|l| l.contains("Window id:"))
-        .and_then(|l| l.split_whitespace().nth(3))
-        .and_then(|id| {
-            if id.starts_with("0x") {
-                u32::from_str_radix(&id[2..], 16).ok()
-            } else {
-                id.parse().ok()
+        // Выбираем bitmap в memory DC
+        let old_bitmap = SelectObject(mem_dc, bitmap as *mut c_void);
+
+        // Копируем содержимое окна в bitmap
+        let bit_result = BitBlt(
+            mem_dc,
+            0, 0,
+            width, height,
+            window_dc,
+            0, 0,
+            SRCCOPY
+        );
+
+        if bit_result == 0 {
+            // Пробуем альтернативный метод с PrintWindow
+            let print_result = PrintWindow(hwnd, mem_dc, 0);
+            if print_result == 0 {
+                SelectObject(mem_dc, old_bitmap);
+                DeleteObject(bitmap as *mut c_void);
+                DeleteDC(mem_dc);
+                ReleaseDC(hwnd, window_dc);
+                return Err(WindowsCaptureError::CaptureFailed("Both BitBlt and PrintWindow failed".to_string()));
             }
+        }
+
+        // Получаем пиксельные данные
+        let mut bitmap_info: BITMAPINFO = mem::zeroed();
+        bitmap_info.bmiHeader = BITMAPINFOHEADER {
+            biSize: mem::size_of::<BITMAPINFOHEADER>() as DWORD,
+            biWidth: width,
+            biHeight: -height, // Отрицательное значение для top-down bitmap
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: 0, // BI_RGB
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        };
+
+        let buffer_size = (width * height * 4) as usize;
+        let mut pixels: Vec<u8> = vec![0; buffer_size];
+
+        let result = GetDIBits(
+            mem_dc,
+            bitmap,
+            0,
+            height as UINT,
+            pixels.as_mut_ptr() as *mut c_void,
+            &mut bitmap_info,
+            DIB_RGB_COLORS
+        );
+
+        // Очистка ресурсов
+        SelectObject(mem_dc, old_bitmap);
+        DeleteObject(bitmap as *mut c_void);
+        DeleteDC(mem_dc);
+        ReleaseDC(hwnd, window_dc);
+
+        if result == 0 {
+            return Err(WindowsCaptureError::WinApiError("Failed to get DIB bits".to_string()));
+        }
+
+        // Конвертируем BGRA в RGBA
+        for chunk in pixels.chunks_exact_mut(4) {
+            chunk.swap(0, 2); // Меняем B и R местами
+        }
+
+        Ok(CapturedImage {
+            width: width as u32,
+            height: height as u32,
+            pixels,
         })
-        .ok_or_else(|| AppError::WindowNotFound("Could not parse window ID".to_string()))
+    }
+}
+
+/// Захватывает окно по заголовку
+pub fn capture_window_by_title(window_title: &str) -> WindowsCaptureResult<CapturedImage> {
+    let hwnd = find_window_by_title(window_title)?;
+    capture_window(hwnd)
+}
+
+/// Получает размер экрана
+pub fn get_screen_dimensions() -> WindowsCaptureResult<(i32, i32)> {
+    unsafe {
+        let desktop_hwnd = GetDesktopWindow();
+        let (_, _, width, height) = get_window_dimensions(desktop_hwnd)?;
+        Ok((width, height))
+    }
+}
+
+/// Захватывает весь экран
+pub fn capture_screen() -> WindowsCaptureResult<CapturedImage> {
+    unsafe {
+        let desktop_hwnd = GetDesktopWindow();
+        capture_window(desktop_hwnd)
+    }
+}
+
+/// Захватывает область экрана
+pub fn capture_screen_area(x: i32, y: i32, width: i32, height: i32) -> WindowsCaptureResult<CapturedImage> {
+    if width <= 0 || height <= 0 {
+        return Err(WindowsCaptureError::CaptureFailed("Invalid area dimensions".to_string()));
+    }
+
+    unsafe {
+        // Получаем DC рабочего стола
+        let desktop_dc = GetDC(ptr::null_mut());
+        if desktop_dc.is_null() {
+            return Err(WindowsCaptureError::WinApiError("Failed to get desktop DC".to_string()));
+        }
+
+        // Создаем совместимый DC
+        let mem_dc = CreateCompatibleDC(desktop_dc);
+        if mem_dc.is_null() {
+            ReleaseDC(ptr::null_mut(), desktop_dc);
+            return Err(WindowsCaptureError::WinApiError("Failed to create compatible DC".to_string()));
+        }
+
+        // Создаем совместимый bitmap
+        let bitmap = CreateCompatibleBitmap(desktop_dc, width, height);
+        if bitmap.is_null() {
+            DeleteDC(mem_dc);
+            ReleaseDC(ptr::null_mut(), desktop_dc);
+            return Err(WindowsCaptureError::WinApiError("Failed to create compatible bitmap".to_string()));
+        }
+
+        // Выбираем bitmap в memory DC
+        let old_bitmap = SelectObject(mem_dc, bitmap as *mut c_void);
+
+        // Копируем область экрана в bitmap
+        let result = BitBlt(
+            mem_dc,
+            0, 0,
+            width, height,
+            desktop_dc,
+            x, y,
+            SRCCOPY
+        );
+
+        if result == 0 {
+            SelectObject(mem_dc, old_bitmap);
+            DeleteObject(bitmap as *mut c_void);
+            DeleteDC(mem_dc);
+            ReleaseDC(ptr::null_mut(), desktop_dc);
+            return Err(WindowsCaptureError::CaptureFailed("BitBlt failed".to_string()));
+        }
+
+        // Получаем пиксельные данные
+        let mut bitmap_info: BITMAPINFO = mem::zeroed();
+        bitmap_info.bmiHeader = BITMAPINFOHEADER {
+            biSize: mem::size_of::<BITMAPINFOHEADER>() as DWORD,
+            biWidth: width,
+            biHeight: -height,
+            biPlanes: 1,
+            biBitCount: 32,
+            biCompression: 0,
+            biSizeImage: 0,
+            biXPelsPerMeter: 0,
+            biYPelsPerMeter: 0,
+            biClrUsed: 0,
+            biClrImportant: 0,
+        };
+
+        let buffer_size = (width * height * 4) as usize;
+        let mut pixels: Vec<u8> = vec![0; buffer_size];
+
+        let dib_result = GetDIBits(
+            mem_dc,
+            bitmap,
+            0,
+            height as UINT,
+            pixels.as_mut_ptr() as *mut c_void,
+            &mut bitmap_info,
+            DIB_RGB_COLORS
+        );
+
+        // Очистка ресурсов
+        SelectObject(mem_dc, old_bitmap);
+        DeleteObject(bitmap as *mut c_void);
+        DeleteDC(mem_dc);
+        ReleaseDC(ptr::null_mut(), desktop_dc);
+
+        if dib_result == 0 {
+            return Err(WindowsCaptureError::WinApiError("Failed to get DIB bits".to_string()));
+        }
+
+        // Конвертируем BGRA в RGBA
+        for chunk in pixels.chunks_exact_mut(4) {
+            chunk.swap(0, 2);
+        }
+
+        Ok(CapturedImage {
+            width: width as u32,
+            height: height as u32,
+            pixels,
+        })
+    }
+}
+
+pub fn get_window_size(window_title: &str) -> WindowsCaptureResult<(i32, i32, i32, i32)> {
+    let hwnd = find_window_by_title(window_title)?;
+    let (x, y, width, height) = get_window_dimensions(hwnd)?;
+    Ok((x, y, width, height))
+}
+
+use opencv::core::{Mat, MatTraitConst, CV_8UC4};
+use opencv::imgcodecs;
+
+pub fn save_as_png(image: &CapturedImage, filename: &str) -> Result<(), Box<dyn Error>> {
+    // Копируем и конвертируем RGBA в BGRA (для OpenCV)
+    let mut bgra_pixels = image.pixels.clone();
+    for chunk in bgra_pixels.chunks_exact_mut(4) {
+        chunk.swap(0, 2);
+    }
+
+    // Промежуточная переменная для продления жизни Mat
+    let mat_tmp = Mat::from_slice(&bgra_pixels)?;
+
+    // Изменяем форму матрицы с учетом количества каналов и высоты
+    let mat = mat_tmp.reshape(4, image.height as i32)?;
+
+    // Сохраняем изображение в файл PNG
+    imgcodecs::imwrite(filename, &mat, &opencv::core::Vector::new())?;
+
+    Ok(())
 }
