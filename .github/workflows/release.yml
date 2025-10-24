@@ -31,7 +31,7 @@ jobs:
         git push || echo "No changes to push"on
 
   build_linux:
-    runs-on: ubuntu-latest
+    runs-on: windows-latest
     permissions: write-all
     name: Build Linux
     steps:
