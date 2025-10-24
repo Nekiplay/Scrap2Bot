@@ -1,6 +1,8 @@
-use crate::drawing::draw_cloud;
 use crate::capture::WindowsCaptureError;
+use crate::drawing::draw_cloud;
 use crate::moving::human_like_move;
+use crate::moving::mouse_left_down;
+use crate::moving::mouse_left_up;
 use crate::objectdetector::{DetectionResult, ObjectDetector};
 use crate::settings::{HumanLikeMovementSettings, Settings};
 use opencv::prelude::MatTraitConst;
@@ -8,12 +10,8 @@ use rand::Rng;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
-use crate::moving::mouse_left_up; 
-use crate::moving::mouse_left_down;
 
-pub fn anti_anti_captcha() {
-    
-}
+pub fn anti_anti_captcha() {}
 
 pub fn calculate_required_merges(barrels: &[DetectionResult]) -> (u32, u32, u32) {
     // Собираем статистику по уровням бочек
@@ -131,13 +129,17 @@ pub fn process_barrels(
                     .templates
                     .iter()
                     .find(|t| t.name == from.object_name)
-                    .ok_or_else(|| WindowsCaptureError::ImageProcessing("Template not found".to_string()))?;
+                    .ok_or_else(|| {
+                        WindowsCaptureError::ImageProcessing("Template not found".to_string())
+                    })?;
 
                 let to_template = detector
                     .templates
                     .iter()
                     .find(|t| t.name == to.object_name)
-                    .ok_or_else(|| WindowsCaptureError::ImageProcessing("Template not found".to_string()))?;
+                    .ok_or_else(|| {
+                        WindowsCaptureError::ImageProcessing("Template not found".to_string())
+                    })?;
 
                 let from_size = (from_template.template.cols(), from_template.template.rows());
                 let to_size = (to_template.template.cols(), to_template.template.rows());

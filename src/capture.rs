@@ -1,28 +1,28 @@
-use std::error::Error;
-use std::fmt;
-use std::process::Command;
-use std::ffi::CString;
-use std::mem;
-use std::ptr;
 use opencv::boxed_ref::BoxedRef;
-use winapi::um::winuser::{
-    FindWindowA, GetWindowRect, GetDC, ReleaseDC, GetClientRect, PrintWindow,
-    GetDesktopWindow, GetWindowDC, SetCapture, ReleaseCapture
-};
-use winapi::um::wingdi::{
-    CreateCompatibleDC, CreateCompatibleBitmap, SelectObject, BitBlt, GetDIBits,
-    DeleteObject, DeleteDC, BITMAPINFO, BITMAPINFOHEADER, DIB_RGB_COLORS, SRCCOPY
-};
-use winapi::shared::windef::{HWND, HDC, HBITMAP, RECT};
-use winapi::shared::minwindef::{UINT, DWORD};
+use std::error::Error;
+use std::ffi::CString;
+use std::fmt;
+use std::mem;
+use std::process::Command;
+use std::ptr;
 use winapi::ctypes::c_void;
+use winapi::shared::minwindef::{DWORD, UINT};
+use winapi::shared::windef::{HBITMAP, HDC, HWND, RECT};
+use winapi::um::wingdi::{
+    BITMAPINFO, BITMAPINFOHEADER, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDIBits, SRCCOPY, SelectObject,
+};
+use winapi::um::winuser::{
+    FindWindowA, GetClientRect, GetDC, GetDesktopWindow, GetWindowDC, GetWindowRect, PrintWindow,
+    ReleaseCapture, ReleaseDC, SetCapture,
+};
 
 #[derive(Debug)]
 pub enum WindowsCaptureError {
     WindowNotFound(String),
     CaptureFailed(String),
     WinApiError(String),
-	ImageProcessing(String),
+    ImageProcessing(String),
 }
 
 impl fmt::Display for WindowsCaptureError {
@@ -31,7 +31,9 @@ impl fmt::Display for WindowsCaptureError {
             WindowsCaptureError::WindowNotFound(title) => write!(f, "Window not found: {}", title),
             WindowsCaptureError::CaptureFailed(msg) => write!(f, "Capture failed: {}", msg),
             WindowsCaptureError::WinApiError(msg) => write!(f, "WinAPI error: {}", msg),
-			WindowsCaptureError::ImageProcessing(msg) => write!(f, "ImageProcessing error: {}", msg),
+            WindowsCaptureError::ImageProcessing(msg) => {
+                write!(f, "ImageProcessing error: {}", msg)
+            }
         }
     }
 }
@@ -49,12 +51,10 @@ pub struct CapturedImage {
 
 /// Находит окно по заголовку
 pub fn find_window_by_title(title: &str) -> WindowsCaptureResult<HWND> {
-    let c_title = CString::new(title).map_err(|e| 
-        WindowsCaptureError::WinApiError(format!("Invalid title string: {}", e)))?;
-    
-    let hwnd = unsafe {
-        FindWindowA(ptr::null(), c_title.as_ptr())
-    };
+    let c_title = CString::new(title)
+        .map_err(|e| WindowsCaptureError::WinApiError(format!("Invalid title string: {}", e)))?;
+
+    let hwnd = unsafe { FindWindowA(ptr::null(), c_title.as_ptr()) };
 
     if hwnd.is_null() {
         return Err(WindowsCaptureError::WindowNotFound(title.to_string()));
@@ -66,36 +66,49 @@ pub fn find_window_by_title(title: &str) -> WindowsCaptureResult<HWND> {
 /// Получает размеры окна
 pub fn get_window_dimensions(hwnd: HWND) -> WindowsCaptureResult<(i32, i32, i32, i32)> {
     let mut rect: RECT = unsafe { mem::zeroed() };
-    
+
     let result = unsafe { GetWindowRect(hwnd, &mut rect) };
-    
+
     if result == 0 {
-        return Err(WindowsCaptureError::WinApiError("Failed to get window rect".to_string()));
+        return Err(WindowsCaptureError::WinApiError(
+            "Failed to get window rect".to_string(),
+        ));
     }
 
-    Ok((rect.left, rect.top, rect.right - rect.left, rect.bottom - rect.top))
+    Ok((
+        rect.left,
+        rect.top,
+        rect.right - rect.left,
+        rect.bottom - rect.top,
+    ))
 }
 
 /// Основная функция захвата окна
 pub fn capture_window(hwnd: HWND) -> WindowsCaptureResult<CapturedImage> {
     let (_, _, width, height) = get_window_dimensions(hwnd)?;
-    
+
     if width <= 0 || height <= 0 {
-        return Err(WindowsCaptureError::CaptureFailed("Invalid window dimensions".to_string()));
+        return Err(WindowsCaptureError::CaptureFailed(
+            "Invalid window dimensions".to_string(),
+        ));
     }
 
     unsafe {
         // Получаем DC окна
         let window_dc = GetDC(hwnd);
         if window_dc.is_null() {
-            return Err(WindowsCaptureError::WinApiError("Failed to get window DC".to_string()));
+            return Err(WindowsCaptureError::WinApiError(
+                "Failed to get window DC".to_string(),
+            ));
         }
 
         // Создаем совместимый DC
         let mem_dc = CreateCompatibleDC(window_dc);
         if mem_dc.is_null() {
             ReleaseDC(hwnd, window_dc);
-            return Err(WindowsCaptureError::WinApiError("Failed to create compatible DC".to_string()));
+            return Err(WindowsCaptureError::WinApiError(
+                "Failed to create compatible DC".to_string(),
+            ));
         }
 
         // Создаем совместимый bitmap
@@ -103,21 +116,16 @@ pub fn capture_window(hwnd: HWND) -> WindowsCaptureResult<CapturedImage> {
         if bitmap.is_null() {
             DeleteDC(mem_dc);
             ReleaseDC(hwnd, window_dc);
-            return Err(WindowsCaptureError::WinApiError("Failed to create compatible bitmap".to_string()));
+            return Err(WindowsCaptureError::WinApiError(
+                "Failed to create compatible bitmap".to_string(),
+            ));
         }
 
         // Выбираем bitmap в memory DC
         let old_bitmap = SelectObject(mem_dc, bitmap as *mut c_void);
 
         // Копируем содержимое окна в bitmap
-        let bit_result = BitBlt(
-            mem_dc,
-            0, 0,
-            width, height,
-            window_dc,
-            0, 0,
-            SRCCOPY
-        );
+        let bit_result = BitBlt(mem_dc, 0, 0, width, height, window_dc, 0, 0, SRCCOPY);
 
         if bit_result == 0 {
             // Пробуем альтернативный метод с PrintWindow
@@ -127,7 +135,9 @@ pub fn capture_window(hwnd: HWND) -> WindowsCaptureResult<CapturedImage> {
                 DeleteObject(bitmap as *mut c_void);
                 DeleteDC(mem_dc);
                 ReleaseDC(hwnd, window_dc);
-                return Err(WindowsCaptureError::CaptureFailed("Both BitBlt and PrintWindow failed".to_string()));
+                return Err(WindowsCaptureError::CaptureFailed(
+                    "Both BitBlt and PrintWindow failed".to_string(),
+                ));
             }
         }
 
@@ -157,7 +167,7 @@ pub fn capture_window(hwnd: HWND) -> WindowsCaptureResult<CapturedImage> {
             height as UINT,
             pixels.as_mut_ptr() as *mut c_void,
             &mut bitmap_info,
-            DIB_RGB_COLORS
+            DIB_RGB_COLORS,
         );
 
         // Очистка ресурсов
@@ -167,7 +177,9 @@ pub fn capture_window(hwnd: HWND) -> WindowsCaptureResult<CapturedImage> {
         ReleaseDC(hwnd, window_dc);
 
         if result == 0 {
-            return Err(WindowsCaptureError::WinApiError("Failed to get DIB bits".to_string()));
+            return Err(WindowsCaptureError::WinApiError(
+                "Failed to get DIB bits".to_string(),
+            ));
         }
 
         // Конвертируем BGRA в RGBA
@@ -207,23 +219,34 @@ pub fn capture_screen() -> WindowsCaptureResult<CapturedImage> {
 }
 
 /// Захватывает область экрана
-pub fn capture_screen_area(x: i32, y: i32, width: i32, height: i32) -> WindowsCaptureResult<CapturedImage> {
+pub fn capture_screen_area(
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+) -> WindowsCaptureResult<CapturedImage> {
     if width <= 0 || height <= 0 {
-        return Err(WindowsCaptureError::CaptureFailed("Invalid area dimensions".to_string()));
+        return Err(WindowsCaptureError::CaptureFailed(
+            "Invalid area dimensions".to_string(),
+        ));
     }
 
     unsafe {
         // Получаем DC рабочего стола
         let desktop_dc = GetDC(ptr::null_mut());
         if desktop_dc.is_null() {
-            return Err(WindowsCaptureError::WinApiError("Failed to get desktop DC".to_string()));
+            return Err(WindowsCaptureError::WinApiError(
+                "Failed to get desktop DC".to_string(),
+            ));
         }
 
         // Создаем совместимый DC
         let mem_dc = CreateCompatibleDC(desktop_dc);
         if mem_dc.is_null() {
             ReleaseDC(ptr::null_mut(), desktop_dc);
-            return Err(WindowsCaptureError::WinApiError("Failed to create compatible DC".to_string()));
+            return Err(WindowsCaptureError::WinApiError(
+                "Failed to create compatible DC".to_string(),
+            ));
         }
 
         // Создаем совместимый bitmap
@@ -231,28 +254,25 @@ pub fn capture_screen_area(x: i32, y: i32, width: i32, height: i32) -> WindowsCa
         if bitmap.is_null() {
             DeleteDC(mem_dc);
             ReleaseDC(ptr::null_mut(), desktop_dc);
-            return Err(WindowsCaptureError::WinApiError("Failed to create compatible bitmap".to_string()));
+            return Err(WindowsCaptureError::WinApiError(
+                "Failed to create compatible bitmap".to_string(),
+            ));
         }
 
         // Выбираем bitmap в memory DC
         let old_bitmap = SelectObject(mem_dc, bitmap as *mut c_void);
 
         // Копируем область экрана в bitmap
-        let result = BitBlt(
-            mem_dc,
-            0, 0,
-            width, height,
-            desktop_dc,
-            x, y,
-            SRCCOPY
-        );
+        let result = BitBlt(mem_dc, 0, 0, width, height, desktop_dc, x, y, SRCCOPY);
 
         if result == 0 {
             SelectObject(mem_dc, old_bitmap);
             DeleteObject(bitmap as *mut c_void);
             DeleteDC(mem_dc);
             ReleaseDC(ptr::null_mut(), desktop_dc);
-            return Err(WindowsCaptureError::CaptureFailed("BitBlt failed".to_string()));
+            return Err(WindowsCaptureError::CaptureFailed(
+                "BitBlt failed".to_string(),
+            ));
         }
 
         // Получаем пиксельные данные
@@ -281,7 +301,7 @@ pub fn capture_screen_area(x: i32, y: i32, width: i32, height: i32) -> WindowsCa
             height as UINT,
             pixels.as_mut_ptr() as *mut c_void,
             &mut bitmap_info,
-            DIB_RGB_COLORS
+            DIB_RGB_COLORS,
         );
 
         // Очистка ресурсов
@@ -291,7 +311,9 @@ pub fn capture_screen_area(x: i32, y: i32, width: i32, height: i32) -> WindowsCa
         ReleaseDC(ptr::null_mut(), desktop_dc);
 
         if dib_result == 0 {
-            return Err(WindowsCaptureError::WinApiError("Failed to get DIB bits".to_string()));
+            return Err(WindowsCaptureError::WinApiError(
+                "Failed to get DIB bits".to_string(),
+            ));
         }
 
         // Конвертируем BGRA в RGBA
@@ -313,7 +335,7 @@ pub fn get_window_size(window_title: &str) -> WindowsCaptureResult<(i32, i32, i3
     Ok((x, y, width, height))
 }
 
-use opencv::core::{Mat, MatTraitConst, CV_8UC4};
+use opencv::core::{CV_8UC4, Mat, MatTraitConst};
 use opencv::imgcodecs;
 
 pub fn save_as_png(image: &CapturedImage, filename: &str) -> Result<(), Box<dyn Error>> {

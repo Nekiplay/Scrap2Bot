@@ -19,7 +19,7 @@ pub struct Settings {
 pub struct Automation {
     pub merge: Merge,
     pub shtorm: Shtorm,
-    pub anticaptcha: AntiCaptcha
+    pub anticaptcha: AntiCaptcha,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

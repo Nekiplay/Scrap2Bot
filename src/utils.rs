@@ -3,18 +3,19 @@ use std::io;
 use std::io::Write;
 use std::process::Command;
 
-use winapi::shared::windef::HWND;
-use winapi::shared::minwindef::BOOL;
-use winapi::um::winuser::{
-    FindWindowW, GetWindowRect, SetWindowPos, SWP_NOZORDER, SWP_NOMOVE,
-};
-use winapi::shared::windef::RECT;
-use std::os::windows::ffi::OsStrExt;
 use std::ffi::OsStr;
+use std::os::windows::ffi::OsStrExt;
 use std::ptr::null_mut;
+use winapi::shared::minwindef::BOOL;
+use winapi::shared::windef::HWND;
+use winapi::shared::windef::RECT;
+use winapi::um::winuser::{FindWindowW, GetWindowRect, SWP_NOMOVE, SWP_NOZORDER, SetWindowPos};
 
 fn to_wstring(s: &str) -> Vec<u16> {
-    OsStr::new(s).encode_wide().chain(std::iter::once(0)).collect()
+    OsStr::new(s)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect()
 }
 
 pub fn check_and_suggest_window_size(
@@ -29,7 +30,12 @@ pub fn check_and_suggest_window_size(
     }
 
     // Получение текущих размеров окна
-    let mut rect: RECT = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+    let mut rect: RECT = RECT {
+        left: 0,
+        top: 0,
+        right: 0,
+        bottom: 0,
+    };
     let result: BOOL = unsafe { GetWindowRect(hwnd, &mut rect) };
     if result == 0 {
         return Err("Не удалось получить размер окна".into());
@@ -48,10 +54,16 @@ pub fn check_and_suggest_window_size(
             recommended_width, recommended_height, TOLERANCE
         );
         if width_diff > TOLERANCE {
-            println!("Разница по ширине: {}px (допуск {}px)", width_diff, TOLERANCE);
+            println!(
+                "Разница по ширине: {}px (допуск {}px)",
+                width_diff, TOLERANCE
+            );
         }
         if height_diff > TOLERANCE {
-            println!("Разница по высоте: {}px (допуск {}px)", height_diff, TOLERANCE);
+            println!(
+                "Разница по высоте: {}px (допуск {}px)",
+                height_diff, TOLERANCE
+            );
         }
 
         print!("Хотите изменить размер окна на рекомендованный? (y/n): ");

@@ -3,8 +3,8 @@ use opencv::core::Vector;
 use opencv::imgcodecs;
 use opencv::imgcodecs::IMREAD_COLOR;
 use opencv::prelude::MatTraitConst;
-use scrap2_bot::capture::{capture_window_by_title, save_as_png, to_mat, WindowsCaptureError};
 use scrap2_bot::capture::get_window_size;
+use scrap2_bot::capture::{WindowsCaptureError, capture_window_by_title, save_as_png, to_mat};
 use scrap2_bot::drawing::display_results_as_table;
 use scrap2_bot::moving::human_like_move;
 use scrap2_bot::objectdetector::DetectionResult;
@@ -70,8 +70,8 @@ fn load_or_create_settings(window_title: &str) -> Result<Settings, Box<dyn std::
                 },
                 anticaptcha: AntiCaptcha {
                     enabled: true,
-                    mode: "mask".to_string()
-                }
+                    mode: "mask".to_string(),
+                },
             },
             templates: Vec::new(),
         };
@@ -119,22 +119,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut last_frame_time = std::time::Instant::now();
     loop {
         let screenshot_path = "screenshot.png";
-        let image =
-            capture_window_by_title(&settings.window_title)?;
+        let image = capture_window_by_title(&settings.window_title)?;
         save_as_png(&image, screenshot_path)?;
-        let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR)
-            .map_err(|e| WindowsCaptureError::ImageProcessing(format!("Failed to load screenshot: {}", e)))?;
+        let mut image = imgcodecs::imread(screenshot_path, IMREAD_COLOR).map_err(|e| {
+            WindowsCaptureError::ImageProcessing(format!("Failed to load screenshot: {}", e))
+        })?;
 
         if image.empty() {
             return Err(WindowsCaptureError::ImageProcessing(
                 "Loaded image is empty".parse().unwrap(),
-            ).into());
+            )
+            .into());
         }
 
         let (detections, detection_time) =
             detector.detect_objects_optimized(&image, settings.convert_to_grayscale)?;
 
-        let (window_x, window_y, window_width, window_height) = get_window_size(&settings.window_title)?;
+        let (window_x, window_y, window_width, window_height) =
+            get_window_size(&settings.window_title)?;
 
         let current_time = std::time::Instant::now();
         let frame_time = current_time.duration_since(last_frame_time).as_secs_f64();
