@@ -1,0 +1,80 @@
+
+name: Release
+
+on: 
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version number (e.g., 2.0.1)'
+        required: true
+        default: '2.0.1'
+
+env:
+  CARGO_TERM_COLOR: always
+  APP_VERSION: ${{ github.event.inputs.version }}
+
+jobs:
+  formating_code:
+    runs-on: ubuntu-latest
+    permissions: write-all
+    name: Formating code
+    steps:
+    - uses: actions/checkout@v4
+    - name: Formating code
+      run: cargo fmt
+    - name: Commit changes
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add .
+        git commit -m "Auto format code" || echo "No changes to commit"
+        git push || echo "No changes to push"on
+
+  build_linux:
+    runs-on: ubuntu-latest
+    needs: [sort_json]
+    permissions: write-all
+    name: Build Linux
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build linux
+      run: cargo build --release
+    - name: Move linux binaries
+      run: |
+        mv target/release/Scrap2Bot Scrap2Bot
+    - name: Upload Linux artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: linux-binaries
+        path: |
+          Scrap2Bot
+
+  create_release:
+    needs: [build_linux]
+    runs-on: ubuntu-latest
+    name: Create Release
+    permissions:
+      contents: write
+
+    steps:
+    - uses: actions/checkout@v4
+    - name: Download Linux artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: linux-binaries
+        path: linux-binaries
+    - name: Create Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: v${{ env.APP_VERSION }}
+        name: 🌟 Scrap 2 Bot ${{ env.APP_VERSION }} 🌟
+        files: |
+          linux-binaries/Scrap2Bot
+
+    - name: Commit changes
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add LIST_*.md
+        git commit -m "Auto-updated program catalogs" || echo "No changes to commit"
+        git push || echo "No changes to push"
