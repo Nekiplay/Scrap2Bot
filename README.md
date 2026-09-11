@@ -11,4 +11,8 @@
 </div>
 
 # Dependencies
-```sudo pacman -S xdotool xorg-xwininfo wmctrl maim opencv```
+1. ```winget install LLVM.LLVM Git.Git --accept-source-agreements --accept-package-agreements```
+2. ```winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"```
+3. ```cd C:\ && git clone https://github.com/microsoft/vcpkg```
+4. ```cd vcpkg && .\bootstrap-vcpkg.bat```
+5. ```.\vcpkg install opencv4:x64-windows```
