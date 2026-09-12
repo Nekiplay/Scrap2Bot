@@ -4,7 +4,7 @@ use opencv::imgcodecs;
 use opencv::imgcodecs::IMREAD_COLOR;
 use opencv::prelude::MatTraitConst;
 use scrap2_bot::capture::get_window_size;
-use scrap2_bot::capture::{WindowsCaptureError, capture_window_by_title, save_as_png, to_mat};
+use scrap2_bot::capture::{WindowsCaptureError, capture_window_by_title, save_as_png};
 use scrap2_bot::drawing::display_results_as_table;
 use scrap2_bot::moving::human_like_move;
 use scrap2_bot::objectdetector::DetectionResult;

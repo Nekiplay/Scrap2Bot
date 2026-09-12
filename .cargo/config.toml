@@ -1,0 +1,21 @@
+[env]
+VCPKGRS_DYNAMIC = "0"
+VCPKGRS_TRIPLET = "x64-windows-static"
+LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
+VCPKG_ROOT = "C:\\vcpkg"
+CLANG_FLAGS = "-I C:\\Program Files\\LLVM\\lib\\clang\\22\\include"
+
+# Настройки применяются строго к целевой архитектуре Windows MSVC,
+# не ломая базовые макросы сборщика Cargo (proc-macro)
+[target.x86_64-pc-windows-msvc]
+rustflags = [
+    "-C", "target-feature=+crt-static",
+    "-l", "d3d11",
+    "-l", "ole32",
+    "-l", "user32",
+    "-l", "gdi32",
+    "-l", "comdlg32",
+    "-l", "advapi32",
+    "-l", "shell32",
+    "-l", "uuid"
+]

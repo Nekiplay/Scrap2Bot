@@ -2,7 +2,7 @@
 REM Script for connecting to Android via Wi-Fi (with USB handling and diagnostics)
 
 REM Parameters
-set "IP=10.10.10.236"
+set "IP=10.10.10.196"
 set "PORT=5555"
 set "SCRCPY_OPTIONS=-e --video-bit-rate 2M --video-codec h264 --max-size 800 --max-fps=60 --disable-screensaver --keyboard=disabled"
 

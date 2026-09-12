@@ -15,7 +15,7 @@ pub fn anti_anti_captcha() {}
 
 pub fn calculate_required_merges(barrels: &[DetectionResult]) -> (u32, u32, u32) {
     // Собираем статистику по уровням бочек
-    let mut level_counts = std::collections::HashMap::new();
+    let mut level_counts = std::collections::HashMap::<u32, u32>::new();
     for barrel in barrels {
         let level = barrel
             .object_name
@@ -46,7 +46,7 @@ pub fn calculate_required_merges(barrels: &[DetectionResult]) -> (u32, u32, u32)
             // Не хватает, считаем сколько нужно получить из более низких уровней
             let missing = needed - available;
             merges_needed += available / 2;
-            needed = missing * 2;
+            needed = missing.saturating_mul(2);
         }
     }
 
