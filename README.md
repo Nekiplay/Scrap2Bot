@@ -15,4 +15,4 @@
 2. ```winget install Microsoft.VisualStudio.2022.BuildTools --override "--passive --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"```
 3. ```cd C:\ && git clone https://github.com/microsoft/vcpkg```
 4. ```cd vcpkg && .\bootstrap-vcpkg.bat```
-5. ```.\vcpkg install opencv4:x64-windows```
+5. ```.\vcpkg install opencv4:x64-windows-static```
